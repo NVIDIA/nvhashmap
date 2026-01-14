@@ -1,0 +1,45 @@
+name: Unit Tests
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          - name: x86_64
+            runs-on: ubuntu-24.04
+          - name: arm64
+            runs-on: ubuntu-24.04-arm
+
+    name: ${{ matrix.name }} tests
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake make g++
+
+      - name: Configure (CMake)
+        run: |
+          git submodule update --init --recursive
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --config Release
+
+      - name: Run GoogleTest binaries
+        run: |
+          ./build/tests/test_basics
+          ./build/tests/test_masks
+          ./build/tests/test_kernels
+          ./build/tests/test_maps
