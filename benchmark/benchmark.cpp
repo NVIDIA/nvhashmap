@@ -36,6 +36,8 @@
 #include <absl/container/flat_hash_map.h>
 #pragma GCC diagnostic pop
 
+#include <folly/container/F14Map.h>
+
 using namespace nvhm;
 using namespace nvhm::experimental;
 
@@ -2056,6 +2058,12 @@ int main(int argc, [[maybe_unused]] const char* argv[]) {
 #endif
 #endif
   if (!benchmark_10M_std<std_map_shim<map<key_t, char*>>, meta_t, fill_not_compare, true>(
+        num_trials, num_keys, shuffle_keys, value_size, num_workers
+      )) {
+    std::cout << "Error!\n";
+  }
+
+  if (!benchmark_10M_std<folly::F14ValueMap<key_t, char*>, meta_t, fill_not_compare, true>(
         num_trials, num_keys, shuffle_keys, value_size, num_workers
       )) {
     std::cout << "Error!\n";

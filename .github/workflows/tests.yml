@@ -26,7 +26,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake make g++
+          sudo apt-get install -y build-essential clang cmake make g++ libboost-all-dev libdouble-conversion-dev libfast-float-dev libfmt-dev libgflags-dev libgoogle-glog-dev libsodium-dev libssl-dev libunwind-dev
 
       - name: Configure (CMake)
         run: |
