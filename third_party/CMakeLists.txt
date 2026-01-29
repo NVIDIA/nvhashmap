@@ -13,16 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if (NVHM_BUILD_TESTS)
+function(add_googletest)
   set(BUILD_GMOCK OFF)
   set(INSTALL_GTEST OFF)
   add_subdirectory(googletest)
-endif()
+endfunction(add_googletest)
 
-if (NVHM_BUILD_BENCH)
+function(add_abseil)
   set(BUILD_TESTING OFF)
   set(ABSL_BUILD_TESTING OFF)
   set(ABSL_BUILD_TEST_HELPERS OFF)
   set(ABSL_USE_GOOGLETEST_HEAD OFF)
   add_subdirectory(abseil-cpp)
+endfunction(add_abseil)
+
+function(add_folly)
+  set(BUILD_TESTS OFF)
+  set(BUILD_BENCHMARKS OFF)
+  add_subdirectory(folly)
+endfunction(add_folly)
+
+
+if (NVHM_BUILD_TESTS)
+  add_googletest()
+endif()
+
+if (NVHM_BUILD_BENCH)
+  add_abseil()
+  add_folly()
 endif()
