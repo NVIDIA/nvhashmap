@@ -643,7 +643,11 @@ struct sse_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m128i;
   using lru_repr_type = __m128i;
 
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wignored-attributes"
   constexpr static int_t size{num_bytes_v<repr_type>};
+  static_assert(size == 16, "We rely on this! Even with ignored attributes, size must be 16!");
+  #pragma GCC diagnostic pop
   constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = uint32_mask16_1r_t;
@@ -730,7 +734,12 @@ struct sse_kernel final : public kernel<-128, -127, false> {
   inline static bool has_not_tombstone(repr_type k) noexcept { return mask_not_tombstone(k) != 0; }
 
   inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    #if defined(__GNUC__) && !defined(__clang__)
+    // TODO: GCC compiles this wrong. Comment out and run test_kernels to see what I mean.
+    return mask_type::count(mask_not_hash(_mm_cmpeq_epi8(k0, k1)));
+    #else
     return mask_type::count(mask_equal(k0, k1));
+    #endif
   }
   inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
     return mask_type::count(mask_not_equal(k0, k1));
@@ -752,13 +761,13 @@ struct sse_kernel final : public kernel<-128, -127, false> {
 
   inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
 #if NVHM_WITH_AVX_BWVL
-    return _mm_mask_set1_epi8(k, m, empty);
+    return _mm_mask_set1_epi8(k, static_cast<__mmask16>(m), empty);
 #else
-    repr_type mx{_mm_set1_epi32(m)}; // [01xy01xy 01xy01xy]
+    repr_type mx{_mm_set1_epi32(static_cast<int32_t>(m))}; // [01xy01xy 01xy01xy]
     mx = _mm_unpacklo_epi8(mx, mx);  // [0011xxyy 0011xxyy]
     mx = _mm_unpacklo_epi8(mx, mx);  // [00001111 xxxxyyyy]
     mx = _mm_unpacklo_epi8(mx, mx);  // [00000000 11111111]
-    mx = _mm_and_si128(mx, _mm_set1_epi64x(0x8040'2010'0804'0201));
+    mx = _mm_and_si128(mx, _mm_set1_epi64x(static_cast<int64_t>(0x8040'2010'0804'0201)));
     mx = _mm_cmpeq_epi8(mx, _mm_setzero_si128());
     return blendv_epi8(_mm_set1_epi8(empty), k, mx);
   #endif
@@ -856,7 +865,7 @@ struct sse_kernel final : public kernel<-128, -127, false> {
 
   inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
     l = cmplt_epu8(l, _mm_set1_epi8(static_cast<char>(t)));
-    k = blendv_epi8(k, _mm_set1_epi8(0x80), l);
+    k = blendv_epi8(k, _mm_set1_epi8(static_cast<char>(0x80)), l);
     return k;
   }
 
@@ -875,7 +884,7 @@ struct sse_kernel final : public kernel<-128, -127, false> {
 #endif
   }
   inline static __m128i cmplt_epu8(__m128i a, __m128i b) noexcept {
-    const __m128i bias{_mm_set1_epi8(0x80)};
+    const __m128i bias{_mm_set1_epi8(static_cast<char>(0x80))};
     a = _mm_xor_si128(a, bias);
     b = _mm_xor_si128(b, bias);
     // a < b is equivalent to b > a
@@ -907,7 +916,11 @@ struct avx_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m256i;
   using lru_repr_type = __m256i;
 
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wignored-attributes"
   constexpr static int_t size{num_bytes_v<repr_type>};
+  static_assert(size == 32, "We rely on this! Even with ignored attributes, size must be 32!");
+  #pragma GCC diagnostic pop
   constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = uint32_mask32_1r_t;
@@ -990,12 +1003,12 @@ struct avx_kernel final : public kernel<-128, -127, false> {
 #if NVHM_WITH_AVX_BWVL
     return _mm256_mask_set1_epi8(k, m, empty);
 #else
-    repr_type mx{_mm256_set1_epi32(m)}; // [01230123 01230123 01230123 01230123]
+    repr_type mx{_mm256_set1_epi32(static_cast<int32_t>(m))}; // [01230123 01230123 01230123 01230123]
     mx = _mm256_unpacklo_epi8(mx, mx);  // [00112233 00112233 00112233 00112233]
     mx = _mm256_unpacklo_epi8(mx, mx);  // [00001111 22223333 00001111 22223333]
     mx = _mm256_permute4x64_epi64(mx, _MM_SHUFFLE(1, 1, 0, 0));  // [00001111 00001111 22223333 22223333]
     mx = _mm256_unpacklo_epi8(mx, mx);  // [00000000 11111111 22222222 33333333]
-    mx = _mm256_and_si256(mx, _mm256_set1_epi64x(0x8040'2010'0804'0201));
+    mx = _mm256_and_si256(mx, _mm256_set1_epi64x(static_cast<int64_t>(0x8040'2010'0804'0201)));
     mx = _mm256_cmpeq_epi8(mx, _mm256_setzero_si256());
     return _mm256_blendv_epi8(_mm256_set1_epi8(empty), k, mx);
 #endif
@@ -1008,7 +1021,7 @@ struct avx_kernel final : public kernel<-128, -127, false> {
     k = _mm256_permutexvar_epi8(_mm256_set1_epi8(static_cast<char>(i)), k);
     s = _mm256_cvtsi256_si32(k);
 #else
-    k = _mm256_permutevar8x32_epi32(k, _mm256_set1_epi32(i / num_bytes_v<int32_t>));
+    k = _mm256_permutevar8x32_epi32(k, _mm256_set1_epi32(static_cast<int32_t>(i / num_bytes_v<int32_t>)));
     s = _mm256_cvtsi256_si32(k);
     s >>= i % num_bytes_v<int32_t> * num_bits_v<state_t>;
 #endif
@@ -1063,8 +1076,8 @@ struct avx_kernel final : public kernel<-128, -127, false> {
     l = _mm256_mask_add_epi8(l, n, l, _mm256_set1_epi8(1));
 #else
     int_t i{mask_type::next(n)};
-    __m128i maj{_mm_cvtsi64_si128(INT64_C(0xff) << (i / sizeof(int64_t) * num_bits_v<lru_t>))};
-    __m256i min{_mm256_set1_epi64x(INT64_C(0x01) << (i % sizeof(int64_t) * num_bits_v<lru_t>))};
+    __m128i maj{_mm_cvtsi64_si128(INT64_C(0xff) << (i / num_bytes_v<int64_t> * num_bits_v<lru_t>))};
+    __m256i min{_mm256_set1_epi64x(INT64_C(0x01) << (i % num_bytes_v<int64_t> * num_bits_v<lru_t>))};
     l = _mm256_add_epi8(l, _mm256_and_si256(_mm256_cvtepi8_epi64(maj), min));
 #endif
     return l;
@@ -1072,7 +1085,7 @@ struct avx_kernel final : public kernel<-128, -127, false> {
 
   inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
     l = cmplt_epu8(l, _mm256_set1_epi8(static_cast<char>(t)));
-    k = _mm256_blendv_epi8(k, _mm256_set1_epi8(0x80), l);
+    k = _mm256_blendv_epi8(k, _mm256_set1_epi8(static_cast<char>(0x80)), l);
     return k;
   }
 
@@ -1082,7 +1095,7 @@ struct avx_kernel final : public kernel<-128, -127, false> {
 
  private:
   inline static __m256i cmplt_epu8(__m256i a, __m256i b) noexcept {
-    __m256i bias{_mm256_set1_epi8(0x80)};
+    __m256i bias{_mm256_set1_epi8(static_cast<char>(0x80))};
     a = _mm256_xor_si256(a, bias);
     b = _mm256_xor_si256(b, bias);
     // a < b is equivalent to b > a
@@ -1108,7 +1121,11 @@ struct avx512_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m512i;
   using lru_repr_type = __m512i;
 
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wignored-attributes"
   constexpr static int_t size{num_bytes_v<repr_type>};
+  static_assert(size == 64, "We rely on this! Even with ignored attributes, size must be 64!");
+  #pragma GCC diagnostic pop
   constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = uint64_mask64_1r_t;
@@ -1184,7 +1201,7 @@ struct avx512_kernel final : public kernel<-128, -127, false> {
     k = _mm512_permutexvar_epi8(_mm512_set1_epi8(static_cast<char>(i)), k);
     s = _mm512_cvtsi512_si32(k);
 #else
-    k = _mm512_permutexvar_epi32(_mm512_set1_epi32(i / num_bytes_v<int32_t>), k);
+    k = _mm512_permutexvar_epi32(_mm512_set1_epi32(static_cast<int32_t>(i / num_bytes_v<int32_t>)), k);
     s = _mm512_cvtsi512_si32(k);
     s >>= i % num_bytes_v<int32_t> * num_bits_v<state_t>;
 #endif
@@ -2434,7 +2451,7 @@ constexpr int_t default_kernel_size{
 #elif NVHM_WITH_SSE >= 2
   sse_kernel_t::size
 #else
-  sizeof(int_t)
+  num_bytes_v<int_t>
 #endif
 };
 

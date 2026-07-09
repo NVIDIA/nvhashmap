@@ -399,13 +399,12 @@ void test_bit_ceil() {
     r = static_cast<T>(one<T> << (i + 1));
 #endif
     EXPECT_EQ(bit_ceil(n), one<T> << (i + 1)) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
-    EXPECT_EQ(bit_ceil(n), std_ext::bit_ceil(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
-    EXPECT_EQ(bit_ceil(n), std_ext::bit_ceil_fallback(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
+    EXPECT_EQ(bit_ceil(n), std_ext::bit_ceil(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r) << " i: " << i;
+    EXPECT_EQ(bit_ceil(n), std_ext::bit_ceil_fallback(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r) << " i: " << i;
 #if defined(__cpp_lib_int_pow2)
     EXPECT_EQ(bit_ceil(n), std::bit_ceil(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
 #endif
   }
-
   
   n = (one<T> << (num_bits_v<T> - 1)) | (one<T> << (num_bits_v<T> / 2));
 #if defined(__cpp_lib_int_pow2)

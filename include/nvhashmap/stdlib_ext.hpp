@@ -122,12 +122,12 @@ constexpr int popcount(T x) noexcept {
     return _mm_popcnt_u32(x);
   }
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return _mm_popcnt_u64(x);
+    return static_cast<int>(_mm_popcnt_u64(x));
   }
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return _mm_popcnt_u64(lo) + _mm_popcnt_u64(hi);
+    return popcount(lo) + popcount(hi);
   }
 
 #elif defined(__GNUC__) || defined(__clang__)
@@ -148,7 +148,7 @@ constexpr int popcount(T x) noexcept {
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return __builtin_popcountll(lo) + __builtin_popcountll(hi);
+    return popcount(lo) + popcount(hi);
   }
 #endif
 
@@ -176,15 +176,16 @@ constexpr int countl_zero(T x) noexcept {
 
 #if defined(__LZCNT__)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    return _lzcnt_u32(x) - (sizeof(uint32_t) * 8 - n);
+    constexpr int n32{sizeof(uint32_t) * 8};
+    return static_cast<int>(_lzcnt_u32(x)) - (n32 - n);
   }
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return _lzcnt_u64(x);
+    return static_cast<int>(_lzcnt_u64(x));
   }
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return hi ? _lzcnt_u64(hi) : 64 + _lzcnt_u64(lo);
+    return hi ? countl_zero(hi) : 64 + countl_zero(lo);
   }
 
 #elif defined(__GNUC__) || defined(__clang__)
@@ -207,7 +208,7 @@ constexpr int countl_zero(T x) noexcept {
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return hi ? __builtin_clzll(hi) : 64 + countl_zero(lo);
+    return hi ? countl_zero(hi) : 64 + countl_zero(lo);
   }
 #endif
 #endif
@@ -231,18 +232,18 @@ constexpr int countr_zero(T x) noexcept {
 
 #if defined(__BMI__)
   if constexpr (sizeof(T) <= sizeof(uint16_t)) {
-    return _tzcnt_u32(x | (UINT32_C(1) << n));
+    return static_cast<int>(_tzcnt_u32(x | (UINT32_C(1) << n)));
   }
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    return _tzcnt_u32(x);
+    return static_cast<int>(_tzcnt_u32(x));
   }
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return _tzcnt_u64(x);
+    return static_cast<int>(_tzcnt_u64(x));
   }
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return lo ? _tzcnt_u64(lo) : 64 + _tzcnt_u64(hi);
+    return lo ? countr_zero(lo) : 64 + countr_zero(hi);
   }
 
 #elif defined(__GNUC__) || defined(__clang__)
@@ -266,7 +267,7 @@ constexpr int countr_zero(T x) noexcept {
   if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
     uint64_t lo{low_bits(x)};
     uint64_t hi{high_bits(x)};
-    return lo ? __builtin_ctzll(lo) : 64 + countr_zero(hi);
+    return lo ? countr_zero(lo) : 64 + countr_zero(hi);
   }
 #endif
 #endif
@@ -389,7 +390,12 @@ constexpr T bit_ceil_fallback(T x) noexcept {
 template <typename T>
 constexpr T bit_ceil(T x) noexcept {
   static_assert(is_unsigned_v<T>);
-
+#if defined(__clang__) && defined(__x86_64__)
+  // TODO: Figure out why this breaks test_basics.cpp for __uint128_t on clang, but only with x86_64.
+  if constexpr (sizeof(T) >= sizeof(__uint128_t)) {
+    return bit_ceil_fallback(x);
+  }
+#endif
   // Annoying, but makes it compatible with std::bit_ceil.
   if (x == 0) return 1;
 

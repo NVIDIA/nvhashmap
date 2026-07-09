@@ -650,17 +650,17 @@ void run_bench_nvhm_map_4(
   if constexpr (nvhm_bench_compile_kernels >= 20) {
     #if NVHM_WITH_SSE >= 2
     if (kernel_type == "sse") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t<>>(NVHM_BENCH_MAP_ARGS_5_());
+      return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
     }
     #endif
     #if NVHM_WITH_AVX >= 2
     if (kernel_type == "avx") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t<>>(NVHM_BENCH_MAP_ARGS_5_());
+      return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
     }
     #endif
     #if NVHM_WITH_AVX512
     if (kernel_type == "avx512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t<>>(NVHM_BENCH_MAP_ARGS_5_());
+      return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
     }
     #endif
     #if NVHM_WITH_NEON

@@ -74,7 +74,7 @@ int compile_map(Args&&... args) {
   double d;
   int_t i;
   const blob_t* cbl;
-  blob_t* bl{nullptr};
+  blob_t* bl{reinterpret_cast<blob_t*>(&c)};
   key_t k;
   state_t s;
   lru_t l;
@@ -220,12 +220,12 @@ int compile_map(Args&&... args) {
   cmap.for_each_value([](const value_t&) {});
   map.for_each_value([](value_t&) {});
 
-  cmap.get_blob_at(r_pos, nullptr);
-  map.get_blob_at(r_pos, nullptr);
-  map.get_blob_at(w_pos, nullptr);
-  cmap.get_blob_at(r_pos, nullptr, 1);
-  map.get_blob_at(r_pos, nullptr, 1);
-  map.get_blob_at(w_pos, nullptr, 1);
+  cmap.get_blob_at(r_pos, &c);
+  map.get_blob_at(r_pos, &c);
+  map.get_blob_at(w_pos, &c);
+  cmap.get_blob_at(r_pos, &c, 1);
+  map.get_blob_at(r_pos, &c, 1);
+  map.get_blob_at(w_pos, &c, 1);
 
   i = map.grow();
 
@@ -298,8 +298,8 @@ int compile_map(Args&&... args) {
   i = map.scrub();
   i = map.scrub(max_lru);
 
-  map.set_blob_at(w_pos, nullptr);
-  map.set_blob_at(w_pos, nullptr, 1);
+  map.set_blob_at(w_pos, &c);
+  map.set_blob_at(w_pos, &c, 1);
 
   map.set_value_at(w_pos, v);
 
