@@ -403,6 +403,9 @@ message(STATUS "NVHM_WANT_SVE2                  = ${NVHM_WANT_SVE2}"            
 message(STATUS "NVHM_WANT_SVE_COPY              = ${NVHM_WANT_SVE_COPY}"             )
 message(STATUS "NVHM_WANT_RANGE_PREFETCH        = ${NVHM_WANT_RANGE_PREFETCH}"       )
 
+# Keep a backup of the base flags. We need it for some dependencies.
+set(NVHM_CXX_BASE_FLAGS "${CMAKE_CXX_FLAGS}")
+
 if ("${NVHM_TARGET}" STREQUAL "x86_64")
   if(${NVHM_WANT_SSE})
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse")

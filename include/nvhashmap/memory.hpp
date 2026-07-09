@@ -59,7 +59,7 @@ namespace nvhm {
 
 namespace detail {
 
-#if defined(__clang__)
+#if (defined(__GNUC__) && (__GNUC__ >= 15)) || defined(__clang__)
 using mm_hint_t = int;
 #else
 using mm_hint_t = _mm_hint;
