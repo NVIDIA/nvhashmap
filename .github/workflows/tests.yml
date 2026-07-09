@@ -46,6 +46,7 @@ jobs:
       - name: Configure (CMake)
         run: |
           git submodule update --init --recursive
+          sed -i 's|#include <bmi2intrin.h>|#include <x86gprintrin.h>|' ./third_party/abseil-cpp/absl/container/internal/raw_hash_set.h
           CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
             cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
