@@ -27,7 +27,6 @@ project(nvhashmap LANGUAGES CXX)
 option(NVHM_BUILD_TESTS "Build the tests" ON)
 option(NVHM_BUILD_BENCH "Build the benchmark" ON)
 option(NVHM_BUILD_TOOLS "Build the tools" ON)
-add_subdirectory(third_party)
 
 # Default to release build.
 if(NOT CMAKE_BUILD_TYPE)
@@ -56,9 +55,6 @@ if("${CMAKE_CXX_FLAGS}" STREQUAL "")
 else()
   message(STATUS "CMAKE_CXX_FLAGS provided as '${CMAKE_CXX_FLAGS}'. Disabling custom settings.")
 endif()
-
-# Enable warnings.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion")
 
 # Determine system cache line size.
 if (${CMAKE_HOST_UNIX})
@@ -230,8 +226,9 @@ check_cxx_source_compiles("
   #endif" NVHM_HAVE_SVE2
 )
 if(${NVHM_HAVE_SVE})
-  set(NVHM_SVE_SIZE_TOOL "${CMAKE_BINARY_DIR}/third_party/sve_num_bits")
+  set(NVHM_SVE_SIZE_TOOL "${CMAKE_BINARY_DIR}/sve_num_bits")
   if(NOT EXISTS ${NVHM_SVE_SIZE_TOOL})
+    message(STATUS "Building SVE size tool...")
     execute_process(
       COMMAND echo -e "
       #include <stdio.h>
@@ -402,9 +399,6 @@ message(STATUS "NVHM_WANT_SVE_SIZE              = ${NVHM_WANT_SVE_SIZE}"        
 message(STATUS "NVHM_WANT_SVE2                  = ${NVHM_WANT_SVE2}"                 )
 message(STATUS "NVHM_WANT_SVE_COPY              = ${NVHM_WANT_SVE_COPY}"             )
 message(STATUS "NVHM_WANT_RANGE_PREFETCH        = ${NVHM_WANT_RANGE_PREFETCH}"       )
-
-# Keep a backup of the base flags. We need it for some dependencies.
-set(NVHM_CXX_BASE_FLAGS "${CMAKE_CXX_FLAGS}")
 
 if ("${NVHM_TARGET}" STREQUAL "x86_64")
   if(${NVHM_WANT_SSE})
@@ -652,13 +646,17 @@ constexpr static hash_layout_t hash_layout{hash_layout_t::monkey_wrench};
 
 }  // namespace nvhm")
 
+message(STATUS "CMAKE_CXX_FLAGS = ${CMAKE_CXX_FLAGS}")
+add_subdirectory(third_party)
+
+# Enable warnings.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion")
+
 # All done. Let's build!
 include_directories(
   "${PROJECT_SOURCE_DIR}/include"
   "${CMAKE_BINARY_DIR}/include"
 )
-
-message(STATUS "CMAKE_CXX_FLAGS = ${CMAKE_CXX_FLAGS}")
 
 if (NVHM_BUILD_TESTS)
   add_subdirectory(tests)

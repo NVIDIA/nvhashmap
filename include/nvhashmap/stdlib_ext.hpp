@@ -32,9 +32,8 @@
 #endif
 
 #if defined(__BMI__) || defined(__POPCNT__) || defined(__LZCNT__)
-#include <immintrin.h>
+#include <x86intrin.h>
 #endif
-
 
 namespace nvhm { 
 
