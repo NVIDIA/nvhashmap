@@ -18,298 +18,142 @@
 #pragma once
 
 #include "common.hpp"
-#include "debug.hpp"
-
-#if NVHM_WITH_SSE2
-#include <emmintrin.h>
-#endif
-
-#if NVHM_WITH_SSE3
-#include <tmmintrin.h>
-#endif
-
-#if NVHM_WITH_SSE4
-#include <smmintrin.h>
-#endif
-
-#if NVHM_WITH_AVX2 || NVHM_WITH_AVX512 || NVHM_WITH_AVX_FVL || NVHM_WITH_AVX_BWVL || \
-  NVHM_WITH_AVX_VBMI
-#include <immintrin.h>
-#endif
-
-#if NVHM_WITH_NEON
-#include <arm_neon.h>
-#endif
-
-#if NVHM_WITH_SVE
-#include <arm_sve.h>
-#endif
+#include "mask.hpp"
 
 #include <array>
-#include <cstring>
 
 namespace nvhm {
 
-template <typename T, typename U>
-constexpr T broadcast_bits(const U v) noexcept {
-  static_assert(std::is_unsigned_v<U>);
-  static_assert(sizeof(T) % sizeof(U) == 0);
+template <typename Kernel, typename Count>
+void count_collisions(const state_t* states, std::array<Count, Kernel::size>& acc) noexcept {
+  using kern_t = Kernel;
+  using mask_t = typename kern_t::mask_type;
 
-  T x{static_cast<T>(v)};
-  for (size_t i{num_bits<T> / 2}; i >= num_bits<U>; i /= 2) {
-    x |= x << i;
+  auto k{kern_t::load(states)};
+
+  std::array<state_t, kern_t::size> tmp;
+  auto it{tmp.begin()};
+
+  for (auto m{kern_t::mask_hash(k)}; mask_t::has_next(m); m = mask_t::step(m)) {
+    const int_t idx{mask_t::next(m)};
+    NVHM_ASSERT_(idx < kern_t::size);
+    *it++ = kern_t::at(k, idx);
   }
-  return x;
+  // Not exactly sure why GCC complains about this. I cannot see how this can even happen?!
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunknown-pragmas"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds="
+  std::sort(tmp.begin(), it);
+#pragma GCC diagnostic pop
+#pragma clang diagnostic pop
+#pragma GCC diagnostic pop
+
+  it = std::unique(tmp.begin(), it);
+  while (it-- > tmp.begin()) {
+    const auto m{kern_t::mask(k, *it)};
+    const int_t i{mask_t::count(m) - 1};
+    NVHM_ASSERT_(i >= 0 && i < kern_t::size);
+    ++acc[to_uint(i)];
+  }
 }
 
-inline void fast_copy(
-  void* const __restrict dst, const void* const __restrict src, const size_t n
-) noexcept {
-#if NVHM_WITH_SVE
-  size_t i{};
-  do {
-    const svbool_t pg{svwhilelt_b8(i, n)};
-    const svint8_t d{svld1_s8(pg, &static_cast<const int8_t*>(src)[i])};
-    svst1_s8(pg, &static_cast<int8_t*>(dst)[i], d);
-    i += svcntb();
-  } while (i < n);
-#else
-  std::memcpy(dst, src, n);
-#endif
+template <typename Kernel>
+inline std::string render_kernel(const typename Kernel::repr_type& k) {
+  using kern_t = Kernel;
+
+  std::ostringstream os;
+  os << std::hex;
+  for (int_t i{}; i < kern_t::size; ++i) {
+    os << (i == 0 ? "" : ", ");
+    os << std::setw(2) << (kern_t::at(k, i) & 0xff);
+  }
+  return os.str();
 }
 
-template <typename This, typename Repr>
-struct mask {
-  using this_type = This;
-  using repr_type = Repr;
+template <typename Kernel>
+inline std::string render_lru_kernel(const typename Kernel::lru_repr_type& l) {
+  using kern_t = Kernel;
 
-  mask() = delete;
-};
-
-template <
-  typename Repr, size_t BitsPerSlot, bool LeftAligned,
-  size_t MaxCount = num_bits<Repr> / BitsPerSlot>
-struct uint_mask final : public mask<uint_mask<Repr, BitsPerSlot, LeftAligned, MaxCount>, Repr> {
-  using base_type = mask<uint_mask<Repr, BitsPerSlot, LeftAligned, MaxCount>, Repr>;
-  using repr_type = typename base_type::repr_type;
-  static_assert(std::is_unsigned_v<repr_type> && sizeof(repr_type) >= sizeof(uint32_t));
-
-  constexpr static size_t bits_per_slot{BitsPerSlot};
-  static_assert(bits_per_slot > 0 && bits_per_slot <= 8);
-  static_assert(has_single_bit(bits_per_slot));
-
-  constexpr static size_t max_count{MaxCount};
-  static_assert(max_count <= num_bits<repr_type> / bits_per_slot);
-  constexpr static int shift{countr_zero(bits_per_slot)};
-
-  uint_mask() = delete;
-
-  constexpr static repr_type empty() noexcept { return {}; }
-
-  constexpr static repr_type full() noexcept {
-    repr_type m{broadcast_bits<repr_type, uint8_t>(0x01)};
-    if constexpr (bits_per_slot < 8) {
-      m |= m << 4;
-    }
-    if constexpr (bits_per_slot < 4) {
-      m |= m << 2;
-    }
-    if constexpr (bits_per_slot < 2) {
-      m |= m << 1;
-    }
-    if constexpr (LeftAligned) {
-      m <<= (bits_per_slot - 1);
-    }
-    m >>= (num_bits<repr_type> - max_count * bits_per_slot);
-    return m;
+  std::ostringstream os;
+  os << std::hex;
+  for (int_t i{}; i < kern_t::size; ++i) {
+    os << (i == 0 ? "" : ", ");
+    os << std::setw(2) << (kern_t::lru_at(l, i) & 0xff);
   }
+  return os.str();
+}
 
-  constexpr static bool has_next(const repr_type m) noexcept { return m != 0; }
-
-  constexpr static size_t count(const repr_type m) noexcept {
-    return static_cast<size_t>(popcount(m));
-  }
-
-  constexpr static size_t next(const repr_type m) noexcept {
-    return static_cast<size_t>(countr_zero(m)) >> shift;
-  }
-
-  constexpr static raw_pos_t next(const repr_type m, const raw_pos_t off) noexcept {
-    return off + next(m);
-  }
-
-  constexpr static repr_type step(const repr_type m) noexcept { return m & (m - 1); }
-
-  constexpr static repr_type truncate(const repr_type m) noexcept { return m & (m ^ (m - 1)); }
-
-  static_assert(count(full()) == max_count);
-};
-
-using uint_mask8_1_t = uint_mask<uint32_t, 1, false, 8>;
-using uint_mask8_2r_t = uint_mask<uint32_t, 2, false, 4>;
-using uint_mask8_2l_t = uint_mask<uint32_t, 2, true, 4>;
-using uint_mask8_4r_t = uint_mask<uint32_t, 4, false, 2>;
-using uint_mask8_4l_t = uint_mask<uint32_t, 4, true, 2>;
-using uint_mask8_8r_t = uint_mask<uint32_t, 8, false, 1>;
-using uint_mask8_8l_t = uint_mask<uint32_t, 8, true, 1>;
-
-using uint_mask16_1_t = uint_mask<uint32_t, 1, false, 16>;
-using uint_mask16_2r_t = uint_mask<uint32_t, 2, false, 8>;
-using uint_mask16_2l_t = uint_mask<uint32_t, 2, true, 8>;
-using uint_mask16_4r_t = uint_mask<uint32_t, 4, false, 4>;
-using uint_mask16_4l_t = uint_mask<uint32_t, 4, true, 4>;
-using uint_mask16_8r_t = uint_mask<uint32_t, 8, false, 2>;
-using uint_mask16_8l_t = uint_mask<uint32_t, 8, true, 2>;
-
-using uint_mask32_1_t = uint_mask<uint32_t, 1, false>;
-using uint_mask32_2r_t = uint_mask<uint32_t, 2, false>;
-using uint_mask32_2l_t = uint_mask<uint32_t, 2, true>;
-using uint_mask32_4r_t = uint_mask<uint32_t, 4, false>;
-using uint_mask32_4l_t = uint_mask<uint32_t, 4, true>;
-using uint_mask32_8r_t = uint_mask<uint32_t, 8, false>;
-using uint_mask32_8l_t = uint_mask<uint32_t, 8, true>;
-
-using uint_mask64_1_t = uint_mask<uint64_t, 1, false>;
-using uint_mask64_2r_t = uint_mask<uint64_t, 2, false>;
-using uint_mask64_2l_t = uint_mask<uint64_t, 2, true>;
-using uint_mask64_4r_t = uint_mask<uint64_t, 4, false>;
-using uint_mask64_4l_t = uint_mask<uint64_t, 4, true>;
-using uint_mask64_8r_t = uint_mask<uint64_t, 8, false>;
-using uint_mask64_8l_t = uint_mask<uint64_t, 8, true>;
-
-using uint_mask128_1_t = uint_mask<__uint128_t, 1, false>;
-using uint_mask128_2r_t = uint_mask<__uint128_t, 2, false>;
-using uint_mask128_2l_t = uint_mask<__uint128_t, 2, true>;
-using uint_mask128_4r_t = uint_mask<__uint128_t, 4, false>;
-using uint_mask128_4l_t = uint_mask<__uint128_t, 4, true>;
-using uint_mask128_8r_t = uint_mask<__uint128_t, 8, false>;
-using uint_mask128_8l_t = uint_mask<__uint128_t, 8, true>;
-
-#if NVHM_WITH_SVE
-template <size_t MaxCount>
-struct sve_mask final : public mask<sve_mask<MaxCount>, svbool_t> {
-  using base_type = mask<sve_mask<MaxCount>, svbool_t>;
-  using repr_type = typename base_type::repr_type;
-
-  constexpr static size_t max_count{MaxCount};
-  static_assert(has_single_bit(max_count));
-
-  sve_mask() = delete;
-
-  inline static repr_type empty() noexcept { return svpfalse_b(); }
-
-  inline static repr_type full() noexcept {
-    if constexpr (max_count == 1) {
-      return svptrue_pat_b8(SV_VL1);
-    } else if constexpr (max_count == 2) {
-      return svptrue_pat_b8(SV_VL2);
-    } else if constexpr (max_count == 4) {
-      return svptrue_pat_b8(SV_VL4);
-    } else if constexpr (max_count == 8) {
-      return svptrue_pat_b8(SV_VL8);
-    } else if constexpr (max_count == 16) {
-      return svptrue_pat_b8(SV_VL16);
-    } else if constexpr (max_count == 32) {
-      return svptrue_pat_b8(SV_VL32);
-    } else if constexpr (max_count == 64) {
-      return svptrue_pat_b8(SV_VL64);
-    } else if constexpr (max_count == 128) {
-      return svptrue_pat_b8(SV_VL128);
-    } else if constexpr (max_count == 256) {
-      return svptrue_pat_b8(SV_VL256);
-    } else {
-      static_assert(!max_count, "Shouldn't happen!");
-    }
-  }
-
-  inline static bool has_next(const repr_type m) noexcept { return svptest_any(m, m); }
-
-  inline static size_t count(const repr_type m) noexcept { return svcntp_b8(m, m); }
-
-  inline static size_t next(const repr_type m) noexcept { return count(svbrkb_b_z(full(), m)); }
-
-  inline static raw_pos_t next(const repr_type m, const raw_pos_t off) noexcept {
-    // Why not non-quantizing incp?
-    return svqincp_n_u64_b8(off, svbrkb_b_z(full(), m));
-  }
-
-  inline static repr_type step(const repr_type m) noexcept {
-    return svnot_b_z(m, svbrka_b_z(m, m));
-  }
-
-  inline static repr_type truncate(const repr_type m) noexcept { return svbrka_b_z(m, m); }
-};
-
-using sve_mask8_t = sve_mask<1>;
-using sve_mask16_t = sve_mask<2>;
-using sve_mask32_t = sve_mask<4>;
-using sve_mask64_t = sve_mask<8>;
-using sve_mask128_t = sve_mask<16>;
-#if __ARM_FEATURE_SVE_BITS >= 256
-using sve_mask256_t = sve_mask<32>;
-#endif
-#if __ARM_FEATURE_SVE_BITS >= 512
-using sve_mask512_t = sve_mask<64>;
-#endif
-#if __ARM_FEATURE_SVE_BITS >= 1024
-using sve_mask1024_t = sve_mask<128>;
-#endif
-#if __ARM_FEATURE_SVE_BITS >= 2048
-using sve_mask2048_t = sve_mask<256>;
-#endif
-using sve_mask_t = sve_mask<__ARM_FEATURE_SVE_BITS / 8>;
-#endif
-
+template <state_t Empty, state_t Tombstone, bool ProducesFalsePositives>
 struct kernel {
-  kernel() = delete;
-};
-
-template <size_t Size>
-struct array_kernel final : public kernel {
-  constexpr static size_t size{Size};
-  static_assert(has_single_bit(size) && size <= num_bits<__uint128_t>);
-  constexpr static size_t size_mask{size - 1};
-
-  using repr_type = std::array<state_t, size>;
-
-  using mask_repr_type = std::conditional_t<
-    size <= num_bits<uint32_t>, uint32_t,
-    std::conditional_t<
-      size <= num_bits<uint64_t>, uint64_t,
-      std::conditional_t<size <= num_bits<__uint128_t>, __uint128_t, void>>>;
-  static_assert(sizeof(mask_repr_type) * 8 >= sizeof(repr_type));
-  using mask_type = uint_mask<mask_repr_type, 1, false, size>;
-  static_assert(mask_type::max_count == size);
-
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
+  constexpr static state_t empty{Empty};
+  constexpr static state_t tombstone{Tombstone};
   static_assert(empty < tombstone && tombstone < 0);
 
-  array_kernel() = delete;
+  /**
+   * @return Whether the kernel may produce false positives in its masks. This only affects `mask(k, s)`.
+   */
+  constexpr static bool produces_false_positives{ProducesFalsePositives};
+
+  NVHM_MAKE_NOT_INSTANTIABLE_(kernel);
+};
+
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+template <int_t Size>
+struct array_kernel final : public kernel<-128, -127, false> {
+  constexpr static int_t size{Size};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
+
+  using repr_type = std::array<state_t, size>;
+  using lru_repr_type = std::array<lru_t, size>;
+
+  using mask_type = std::conditional_t<size <= num_bits_v<__uint128_t>,
+    uint_mask_t<size, 1, mask_align_t::right>,
+    bitset_mask<size>
+  >;
+  static_assert(mask_type::max_count == size);
+
+  using mask_repr_type = typename mask_type::repr_type;
+  static_assert(num_bits_v<mask_repr_type> >= size);
+
+  NVHM_MAKE_NOT_INSTANTIABLE_(array_kernel);
 
   /**
    * Loads slot states from memory. The memory address is guaranteed to be aligned.
    */
-  constexpr static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     repr_type k;
-    std::memcpy(k.begin(), assume_aligned<size>(ptr), size);
+    std::copy_n(assume_aligned<std::min(size, cache_line_size)>(ptr), k.size(), k.begin());
     return k;
   }
 
   /**
    * Stores slot states to memory. The memory address is guaranteed to be aligned.
    */
-  constexpr static void store(const repr_type& k, state_t* __restrict ptr) noexcept {
-    std::memcpy(assume_aligned<size>(ptr), k.begin(), size);
+  inline static void store(const repr_type& k, state_t* ptr) noexcept {
+    std::copy_n(k.begin(), k.size(), assume_aligned<std::min(size, cache_line_size)>(ptr));
   }
 
   /**
-   * Masks slots that match the provided hash.
+   * Masks slots that match the provided state.
    */
   constexpr static mask_repr_type mask(const repr_type& k, state_t s) noexcept {
     mask_repr_type m{};
-    for (size_t i{}; i < size; ++i) {
-      m |= static_cast<mask_repr_type>(k[i] == s) << i;
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(at(k, i) == s) << to_uint(i);
+    }
+    return m;
+  }
+  /**
+   * Masks slots that do not match the provided state.
+   */
+  constexpr static mask_repr_type mask_not(const repr_type& k, state_t s) noexcept {
+    mask_repr_type m{};
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(at(k, i) != s) << to_uint(i);
     }
     return m;
   }
@@ -319,19 +163,18 @@ struct array_kernel final : public kernel {
    */
   constexpr static mask_repr_type mask_hash(const repr_type& k) noexcept {
     mask_repr_type m{};
-    for (size_t i{}; i < size; ++i) {
-      m |= static_cast<mask_repr_type>(k[i] >= 0) << i;
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(is_hash(at(k, i))) << to_uint(i);
     }
     return m;
   }
-
   /**
    * Returns mask that identifies all slots that are either `empty` or `tombstones`.
    */
-  constexpr static mask_repr_type mask_non_hash(const repr_type& k) noexcept {
+  constexpr static mask_repr_type mask_not_hash(const repr_type& k) noexcept {
     mask_repr_type m{};
-    for (size_t i{}; i < size; ++i) {
-      m |= static_cast<mask_repr_type>(k[i] < 0) << i;
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(is_not_hash(at(k, i))) << to_uint(i);
     }
     return m;
   }
@@ -340,159 +183,305 @@ struct array_kernel final : public kernel {
    * Returns mask that identifies all empty slots. May assume only valid values are present.
    */
   constexpr static mask_repr_type mask_empty(const repr_type& k) noexcept { return mask(k, empty); }
-
+  /**
+   * Returns mask that identifies all slots that are not `empty`.
+   */
+  constexpr static mask_repr_type mask_not_empty(const repr_type& k) noexcept { return mask_not(k, empty); }
   /**
    * Returns mask that identifies all tombstone slots. May assume only valid values are present.
    */
-  constexpr static mask_repr_type mask_tombstone(const repr_type& k) noexcept {
-    return mask(k, tombstone);
-  }
+  constexpr static mask_repr_type mask_tombstone(const repr_type& k) noexcept { return mask(k, tombstone); }
+  /**
+   * Returns mask that identifies all slots that are not `tombstone`.
+   */
+  constexpr static mask_repr_type mask_not_tombstone(const repr_type& k) noexcept { return mask_not(k, tombstone); }
 
-  constexpr static repr_type all(state_t s) noexcept {
-    repr_type k;
-    std::fill(k.begin(), k.end(), s);
-    return k;
-  }
-
-  constexpr static repr_type all_empty() noexcept { return all(empty); }
-
-  constexpr static repr_type all_tombstone() noexcept { return all(tombstone); }
-
-  constexpr static bool has_empty(const repr_type& k) noexcept {
-    bool b{};
-    for (size_t i{}; i < size; ++i) {
-      b |= k[i] == empty;
+  /**
+   * Returns mask that identifies all slots that are equal.
+   */
+  constexpr static mask_repr_type mask_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    mask_repr_type m{};
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(at(k0, i) == at(k1, i)) << to_uint(i);
     }
-    return b;
+    return m;
+  }
+  /**
+   * Returns mask that identifies all slots that are equal.
+   */
+  constexpr static mask_repr_type mask_not_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    mask_repr_type m{};
+    for (int_t i{}; i < size; ++i) {
+      m |= static_cast<mask_repr_type>(at(k0, i) != at(k1, i)) << to_uint(i);
+    }
+    return m;
+  }
+
+  /**
+   * Returns true if the kernel contains the given value.
+   */
+  constexpr static bool has(const repr_type& k, const state_t s) noexcept {
+    return std::any_of(k.begin(), k.end(), [s](state_t x) { return x == s; });
+  }
+  /**
+   * Returns true if the kernel does not contain the given value.
+   */
+  constexpr static bool has_not(const repr_type& k, const state_t s) noexcept {
+    return std::any_of(k.begin(), k.end(), [s](state_t x) { return x != s; });
+  }
+
+  /**
+   * Returns true if the kernel contains any hash values.
+   */
+  constexpr static bool has_hash(const repr_type& k) noexcept {
+    return std::any_of(k.begin(), k.end(), [](state_t s) { return is_hash(s); });
+  }
+  /**
+   * Returns true if the kernel contains any non-hash values.
+   */
+  constexpr static bool has_not_hash(const repr_type& k) noexcept {
+    return std::any_of(k.begin(), k.end(), [](state_t s) { return is_not_hash(s); });
+  }
+
+  /**
+   * Returns true if the kernel contains any `empty` values.
+   */
+  constexpr static bool has_empty(const repr_type& k) noexcept { return has(k, empty); }
+  /**
+   * Returns true if the kernel contains any not `empty` values.
+   */
+  constexpr static bool has_not_empty(const repr_type& k) noexcept { return has_not(k, empty); }
+  /**
+   * Returns true if the kernel contains any `tombstone` values.
+   */
+  constexpr static bool has_tombstone(const repr_type& k) noexcept { return has(k, tombstone); }
+  /**
+   * Returns true if the kernel contains any not `tombstone` values.
+   */
+  constexpr static bool has_not_tombstone(const repr_type& k) noexcept { return has_not(k, tombstone); }
+
+  /**
+   * Returns the number of slots that are equal.
+   */
+  constexpr static int_t count_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    int_t n{};
+    for (int_t i{}; i < size; ++i) {
+      n += at(k0, i) == at(k1, i);
+    }
+    return n;
+  }
+  /**
+   * Returns the number of slots that are notequal.
+   */
+  constexpr static int_t count_not_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    int_t n{};
+    for (int_t i{}; i < size; ++i) {
+      n += at(k0, i) != at(k1, i);
+    }
+    return n;
+  }
+
+  /**
+   * Returns the number of slots that are `empty`.
+   */
+  constexpr static int_t count_empty(const repr_type& k) noexcept {
+    return std::count_if(k.begin(), k.end(), [](state_t s) { return s == empty; });
+  }
+  /**
+   * Returns the number of slots that are `tombstone`.
+   */
+  constexpr static int_t count_tombstone(const repr_type& k) noexcept {
+    return std::count_if(k.begin(), k.end(), [](state_t s) { return s == tombstone; });
   }
 
   constexpr static repr_type hash_to_tombstone(const repr_type& k) noexcept {
+    // 0x00 ~ 0x7f => 0x81
+    // 0x80 => 0x80
+    // 0x81 => 0x81
     repr_type r;
-    for (size_t i{}; i < size; ++i) {
-      r[i] = std::min(k[i], tombstone);
+    for (int_t i{}; i < size; ++i) {
+      set_at(r, i, std::min(at(k, i), tombstone));
     }
     return r;
   }
 
-  constexpr static state_t at(const repr_type& k, const size_t i) noexcept {
-    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    return k[i];
-  }
-
-  constexpr static lru_t lru_at(const repr_type& k, const size_t i) noexcept {
-    return static_cast<lru_t>(at(k, i));
-  }
-
-  constexpr static size_t min_lru_index(const repr_type& k) noexcept {
-    lru_t lru{lru_at(k, 0)};
-    size_t lru_idx{};
-
-    for (size_t i{1}; i < size; ++i) {
-      const lru_t ki{lru_at(k, i)};
-      if (ki < lru) {
-        lru = ki;
-        lru_idx = i;
-      }
-    }
-
-    return lru_idx;
-  }
-
-  constexpr static repr_type lru_update(
-    const repr_type& k, const repr_type& l, const mask_repr_type& m
-  ) {
-    NVHM_ASSERT_(mask_type::has_next(m), "m = ", render_mask<mask_type>(m));
-    const size_t i{mask_type::next(m)};
-    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    NVHM_ASSERT_(slot_is_occupied(at(k, i)));
-
-    const int shift{lru_at(l, i) >= max_lru};
-
+  constexpr static repr_type not_hash_to_empty(const repr_type& k) noexcept {
+    // 0x00 ~ 0x7f => keep
+    // 0x80 ~ 0x81 => 0x80
+    constexpr uint_t e{to_uint(empty)};
     repr_type r;
-    for (size_t j{}; j < size; ++j) {
-      uint32_t lj{lru_at(l, j)};
-      if (slot_is_occupied(at(k, j))) {
-        lj >>= shift;
-      }
-      lj += (j == i);
-      r[j] = static_cast<state_t>(lj);
+    for (int_t i{}; i < size; ++i) {
+      uint_t ki{to_uint(at(k, i))};
+      set_at(r, i, static_cast<state_t>(std::min(ki, e)));
     }
     return r;
+  }
+
+  constexpr static repr_type to_empty(const repr_type& k, mask_repr_type m) noexcept {
+    repr_type r;
+    for (int_t i{}; i < size; ++i) {
+      set_at(r, i, mask_type::at(m, i) ? empty : at(k, i));
+    }
+    return r;
+  }
+
+  constexpr static state_t at(const repr_type& k, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return k[to_uint(i)];
+  }
+
+  constexpr static void set_at(repr_type& k, int_t i, state_t s) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    k[to_uint(i)] = s;
+  }
+
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    lru_repr_type l;
+    std::copy_n(assume_aligned<std::min(size, cache_line_size)>(ptr), size, l.begin());
+    return l;
+  }
+
+  inline static void store_lru(const lru_repr_type& l, lru_t* ptr) noexcept {
+    std::copy_n(l.begin(), size, assume_aligned<std::min(size, cache_line_size)>(ptr));
+  }
+
+  constexpr static std::pair<lru_t, int_t> min_lru(const lru_repr_type& l) noexcept {
+    lru_t lru{lru_at(l, 0)};
+    int_t idx{};
+    for (int_t i{1}; i < size; ++i) {
+      lru_t li{lru_at(l, i)};
+      if (li < lru) {
+        lru = li;
+        idx = i;
+      }
+    }
+    return {lru, idx};
+  }
+
+  constexpr static mask_repr_type mask_min_lru(const lru_repr_type& l) noexcept {
+    return mask_type::single(min_lru(l).second);
+  }
+
+  constexpr static mask_repr_type mask_lru_below(const lru_repr_type& l, lru_t t) noexcept {
+    mask_repr_type m{};
+    for (int_t i{}; i < size; ++i) {
+      if (l[to_uint(i)] < t) {
+        m |= mask_type::single(i);
+      }
+    }
+    return m;
+  }
+
+  constexpr static lru_repr_type update_lru(const lru_repr_type& l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    const int_t i{mask_type::next(n)};
+
+    int_t rescale_shift{lru_at(l, i) >= max_lru};
+    lru_repr_type r;
+    for (int_t j{}; j < size; ++j) {
+      uint_t lj{lru_at(l, j)};
+      lj = (lj >> rescale_shift) + (j == i);
+      set_lru_at(r, j, static_cast<lru_t>(lj));
+    }
+    return r;
+  }
+
+  constexpr static repr_type to_empty_if_lru_below(const repr_type& k, const lru_repr_type& l, lru_t t) noexcept {
+    repr_type r;
+    for (int_t i{}; i < size; ++i) {
+      set_at(r, i, lru_at(l, i) < t ? empty : at(k, i));
+    }
+    return r;
+  }
+
+  constexpr static lru_t lru_at(const lru_repr_type& l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return l[to_uint(i)];
+  }
+
+  constexpr static void set_lru_at(lru_repr_type& l, int_t i, lru_t lru) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    l[to_uint(i)] = lru;
   }
 };
 
-using array_kernel8_t = array_kernel<1>;
-using array_kernel16_t = array_kernel<2>;
-using array_kernel32_t = array_kernel<4>;
-using array_kernel64_t = array_kernel<8>;
-using array_kernel128_t = array_kernel<16>;
-using array_kernel256_t = array_kernel<32>;
-using array_kernel512_t = array_kernel<64>;
-using array_kernel1024_t = array_kernel<128>;
+using array_kernel1_t = array_kernel<1>;
+using array_kernel2_t = array_kernel<2>;
+using array_kernel4_t = array_kernel<4>;
+using array_kernel8_t = array_kernel<8>;
+using array_kernel16_t = array_kernel<16>;
+using array_kernel32_t = array_kernel<32>;
+using array_kernel64_t = array_kernel<64>;
+using array_kernel128_t = array_kernel<128>;
+using array_kernel256_t = array_kernel<256>;
+using array_kernel512_t = array_kernel<512>;
 
-template <typename Repr>
-struct uint_kernel final : public kernel {
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+template <typename Repr, bool ProducesFalsePositives>
+struct uint_kernel final : public kernel<-128, -127, ProducesFalsePositives> {
+  using base_type = kernel<-128, -127, ProducesFalsePositives>;
+
   using repr_type = Repr;
   static_assert(std::is_unsigned_v<repr_type>);
+  using lru_repr_type = Repr;
+  static_assert(std::is_unsigned_v<lru_repr_type>);
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  using base_type::produces_false_positives;
 
-  using mask_repr_type =
-    std::conditional_t<sizeof(repr_type) < sizeof(uint32_t), uint32_t, repr_type>;
-  static_assert(sizeof(mask_repr_type) >= sizeof(repr_type));
-  using mask_type = uint_mask<mask_repr_type, 8, true, size>;
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
+
+  using mask_type = uint_mask_t<num_bits_v<repr_type>, 8, mask_align_t::left>;
   static_assert(mask_type::max_count == size);
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  using mask_repr_type = typename mask_type::repr_type;
+  static_assert(num_bytes_v<mask_repr_type> >= size);
 
-  constexpr static repr_type lsbs{broadcast_bits<repr_type, uint8_t>(0x01)};
-  constexpr static repr_type msbs{broadcast_bits<repr_type, uint8_t>(0x80)};
+  constexpr static mask_repr_type lsbs{broadcast<repr_type, uint8_t>(0x01)};
+  constexpr static mask_repr_type msbs{broadcast<repr_type, uint8_t>(0x80)};
+  constexpr static mask_repr_type all_bits{broadcast<repr_type, uint8_t>(0xff)};
 
-  uint_kernel() = delete;
+  NVHM_MAKE_NOT_INSTANTIABLE_(uint_kernel);
 
   /**
    * Loads slot states from memory. The memory address is guaranteed to be aligned.
    */
-  constexpr static repr_type load(const state_t* __restrict ptr) noexcept {
-    return *reinterpret_cast<const repr_type* __restrict>(assume_aligned<size>(ptr));
+  inline static repr_type load(const state_t* ptr) noexcept {
+    return *reinterpret_cast<const repr_type*>(assume_aligned<size>(ptr));
   }
 
   /**
    * Stores slot states to memory. The memory address is guaranteed to be aligned.
    */
-  constexpr static void store(repr_type k, state_t* __restrict ptr) noexcept {
-    *reinterpret_cast<repr_type* __restrict>(assume_aligned<size>(ptr)) = k;
+  inline static void store(repr_type k, state_t* ptr) noexcept {
+    *reinterpret_cast<repr_type*>(assume_aligned<size>(ptr)) = k;
   }
 
   /**
    * Masks slots that match the provided hash (may return false positives).
    */
   constexpr static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    k ^= lsbs * static_cast<lru_t>(s);
-    if constexpr (allow_false_positive_matches) {
+    mask_repr_type m{k};
+    m ^= lsbs * static_cast<uint8_t>(s);
+    if constexpr (produces_false_positives) {
       // Compiles to one assembly instruction less.
       // https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
-      k = (k - lsbs) & ~k & msbs;
+      m = (m - lsbs) & (~m & msbs);
     } else {
-      k |= ~msbs + (k & ~msbs);  // Set 7th bits to 1 if any bit below is not zero.
-      k = ~k & msbs;             // Isolate 7th bit.
+      m = ((~m & ~msbs) + lsbs) & (~m & msbs);
     }
-    return k;
+    return m;
+  }
+  constexpr static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask(k, s) ^ msbs;
   }
 
-  /**
-   * Returns mask that identifies all slots that contains actual hashes.
-   */
-  constexpr static mask_repr_type mask_hash(repr_type k) noexcept { return ~k & msbs; }
-
-  /**
-   * Returns mask that identifies all slots that are either `empty` or `tombstones`.
-   */
-  constexpr static mask_repr_type mask_non_hash(repr_type k) noexcept { return k & msbs; }
+  constexpr static mask_repr_type mask_hash(repr_type k) noexcept {
+    mask_repr_type m{k};
+    return ~m & msbs;
+  }
+  constexpr static mask_repr_type mask_not_hash(repr_type k) noexcept { return k & msbs; }
 
   /**
    * Returns mask that identifies all empty slots. May assume only valid values are present.
@@ -502,210 +491,182 @@ struct uint_kernel final : public kernel {
    *   1 ~ 1  =>  0
    */
   constexpr static mask_repr_type mask_empty(repr_type k) noexcept { return k & (~k << 7) & msbs; }
+  constexpr static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_empty(k) ^ msbs; }
+  constexpr static mask_repr_type mask_tombstone(repr_type k) noexcept { return k & (k << 7) & msbs; }
+  constexpr static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_tombstone(k) ^ msbs; }
 
-  /**
-   * Returns mask that identifies all tombstone slots. May assume only valid values are present.
-   */
-  constexpr static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return k & (k << 7) & msbs;
+  constexpr static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    mask_repr_type m{k0};
+    m ^= k1;
+    m = ((~m & ~msbs) + lsbs) & (~m & msbs);
+    return m;
+  }
+  constexpr static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_equal(k0, k1) ^ msbs;
   }
 
-  constexpr static repr_type all_empty() noexcept { return msbs; }
-
-  constexpr static repr_type all_tombstone() noexcept { return msbs | lsbs; }
+  constexpr static bool has_hash(repr_type k) noexcept { return mask_hash(k) != 0; }
+  constexpr static bool has_not_hash(repr_type k) noexcept { return mask_not_hash(k) != 0; }
 
   constexpr static bool has_empty(repr_type k) noexcept { return mask_empty(k) != 0; }
+  constexpr static bool has_not_empty(repr_type k) noexcept { return mask_not_empty(k) != 0; }
+  constexpr static bool has_tombstone(repr_type k) noexcept { return mask_tombstone(k) != 0; }
+  constexpr static bool has_not_tombstone(repr_type k) noexcept { return mask_not_tombstone(k) != 0; }
+
+  constexpr static int_t count_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    return mask_type::count(mask_equal(k0, k1));
+  }
+  constexpr static int_t count_not_equal(const repr_type& k0, const repr_type& k1) noexcept {
+    return mask_type::count(mask_not_equal(k0, k1));
+  }
 
   constexpr static repr_type hash_to_tombstone(repr_type k) noexcept {
-    // 0 ~ 0  =>  1 ~ 1
-    // 0 ~ 1  =>  1 ~ 1
-    // 1 ~ 0  =>  1 ~ 0
-    // 1 ~ 1  =>  1 ~ 1
-    return msbs | (((~k >> 7) | k) & lsbs);
+    // 0x00 ~ 0x7f => 0x81
+    // 0x80 => 0x80
+    // 0x81 => 0x81
+    mask_repr_type m{k};
+    return msbs | (((~m >> 7) | m) & lsbs);
   }
 
-  constexpr static state_t at(repr_type k, size_t i) noexcept {
+  constexpr static repr_type not_hash_to_empty(repr_type k) noexcept {
+    // 0x00 ~ 0x7f => keep
+    // 0x80 ~ 0x81 => 0x80
+    mask_repr_type m{k};
+    return static_cast<repr_type>(m & (~lsbs | (~m >> 7)));
+  }
+
+  constexpr static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    m = (m >> 7) * 0xff;
+    // https://graphics.stanford.edu/~seander/bithacks.html#MaskedMerge
+    m = k ^ ((k ^ msbs) & m);
+    return static_cast<repr_type>(m);
+  }
+
+  constexpr static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    return static_cast<state_t>(k >> (i * num_bits<state_t>));
+    return static_cast<state_t>(k >> (i * num_bits_v<state_t>));
   }
 
-  constexpr static lru_t lru_at(repr_type k, size_t i) noexcept {
-    return static_cast<lru_t>(at(k, i));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return *reinterpret_cast<const lru_repr_type*>(assume_aligned<size>(ptr));
   }
 
-  constexpr static size_t min_lru_index(repr_type k) noexcept {
-    lru_t lru{static_cast<lru_t>(k)};
-    size_t lru_idx{};
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    *reinterpret_cast<lru_repr_type*>(assume_aligned<size>(ptr)) = l;
+  }
 
-    for (size_t i{1}; i < size; ++i) {
-      k >>= 8;
-      const lru_t ki{static_cast<lru_t>(k)};
-      if (ki < lru) {
-        lru = ki;
-        lru_idx = i;
+  constexpr static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{lru_at(l, 0)};
+    int_t idx{};
+    for (int_t i{1}; i < size; ++i) {
+      lru_t li{lru_at(l, i)};
+      if (li < lru) {
+        lru = li;
+        idx = i;
       }
     }
-
-    return lru_idx;
+    return {lru, idx};
   }
 
-  constexpr static repr_type lru_update(const repr_type k, const repr_type l, mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m), "m = ", render_mask<mask_type>(m));
-    const size_t i{mask_type::next(m)};
-    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    NVHM_ASSERT_(slot_is_occupied(at(k, i)));
+  constexpr static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    return mask_type::single(min_lru(l).second);
+  }
 
-    // Rescale if l[i] hit maximum value.
-    mask_repr_type r;
-    if (NVHM_LIKELY_(lru_at(l, i) < max_lru)) {
-      r = l;
-    } else {
-      r = (l >> 1) & ~msbs;
-      m = (mask_non_hash(k) >> 7) * 0xff;
-      // https://graphics.stanford.edu/~seander/bithacks.html#MaskedMerge
-      r ^= (r ^ l) & m;
+  constexpr static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    mask_repr_type m{};
+    for (int_t i{}; i < size; ++i) {
+      mask_repr_type c{lru_at(l, i) < t};
+      m |= c << (i * num_bits_v<lru_t>);
     }
-
-    // Add 1 to l[i].
-    m = mask_repr_type{0xff} << (i * num_bits<lru_t>);
-    // https://graphics.stanford.edu/~seander/bithacks.html#MaskedMerge
-    r ^= (r ^ (r + (mask_repr_type{0x01} << (i * num_bits<lru_t>)))) & m;
-    return static_cast<repr_type>(r);
-  }
-};
-
-template <>
-struct uint_kernel<uint8_t> final : public kernel {
-  using repr_type = uint8_t;
-
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
-
-  using mask_type = uint_mask32_1_t;
-  using mask_repr_type = typename mask_type::repr_type;
-  static_assert(sizeof(mask_repr_type) >= sizeof(repr_type));
-
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
-
-  uint_kernel() = delete;
-
-  /**
-   * Loads slot states from memory. The memory address is guaranteed to be aligned.
-   */
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
-    return *reinterpret_cast<const repr_type*>(assume_aligned<size>(ptr));
+    return m << 7;
   }
 
-  /**
-   * Stores slot states to memory. The memory address is guaranteed to be aligned.
-   */
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
-    *reinterpret_cast<repr_type*>(assume_aligned<size>(ptr)) = k;
+  constexpr static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    int_t i{mask_type::next(n)};
+
+    int_t rescale_shift{lru_at(l, i) >= max_lru};
+    n = l >> rescale_shift;
+    n &= rescale_shift ? ~msbs : all_bits;
+
+    l = 1;
+    l <<= i * num_bits_v<lru_t>;
+    n += l;
+    return static_cast<lru_repr_type>(n);
   }
 
-  /**
-   * Masks slots that match the provided hash (may return false positives).
-   */
-  constexpr static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return static_cast<mask_repr_type>(k == static_cast<repr_type>(s));
+  constexpr static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    return to_empty(k, mask_lru_below(l, t));
   }
 
-  /**
-   * Returns mask that identifies all slots that contains actual hashes.
-   */
-  constexpr static mask_repr_type mask_hash(repr_type k) noexcept { return (k >> 7) ^ 0x1; }
-
-  /**
-   * Returns mask that identifies all slots that are either `empty` or `tombstones`.
-   */
-  constexpr static mask_repr_type mask_non_hash(repr_type k) noexcept { return k >> 7; }
-
-  /**
-   * Returns mask that identifies all empty slots. May assume only valid values are present.
-   */
-  constexpr static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
-
-  /**
-   * Returns mask that identifies all tombstone slots. May assume only valid values are present.
-   */
-  constexpr static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask(k, tombstone);
-  }
-
-  constexpr static repr_type all_empty() noexcept { return static_cast<repr_type>(empty); }
-
-  constexpr static repr_type all_tombstone() noexcept { return static_cast<repr_type>(tombstone); }
-
-  constexpr static bool has_empty(repr_type k) noexcept { return k == all_empty(); }
-
-  constexpr static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return static_cast<repr_type>(std::min(at(k, 0), tombstone));
-  }
-
-  constexpr static state_t at(repr_type k, [[maybe_unused]] size_t i) noexcept {
+  constexpr static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    return static_cast<state_t>(k);
-  }
-
-  constexpr static lru_t lru_at(repr_type k, size_t i) noexcept {
-    return static_cast<lru_t>(at(k, i));
-  }
-
-  constexpr static size_t min_lru_index(repr_type) noexcept { return {}; }
-
-  constexpr static repr_type lru_update(
-    const repr_type k, repr_type l, [[maybe_unused]] const mask_repr_type m
-  ) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, 0)));
-
-    l >>= mask_hash(k) & (l >= max_lru);
-    l += 1;
-    return l;
+    return static_cast<lru_t>(l >> (i * num_bits_v<lru_t>));
   }
 };
 
-using uint_kernel8_t = uint_kernel<uint8_t>;
-using uint_kernel16_t = uint_kernel<uint16_t>;
-using uint_kernel32_t = uint_kernel<uint32_t>;
-using uint_kernel64_t = uint_kernel<uint64_t>;
-using uint_kernel128_t = uint_kernel<__uint128_t>;
+using uint_kernel1_t = uint_kernel<uint8_t, false>;
+using uint_kernel2_t = uint_kernel<uint16_t, false>;
+using uint_kernel4_t = uint_kernel<uint32_t, false>;
+using uint_kernel8_t = uint_kernel<uint64_t, false>;
+using uint_kernel16_t = uint_kernel<__uint128_t, false>;
 
-#if NVHM_WITH_SSE2
-struct sse_kernel final : public kernel {
+using fast_uint_kernel1_t = uint_kernel<uint8_t, true>;
+using fast_uint_kernel2_t = uint_kernel<uint16_t, true>;
+using fast_uint_kernel4_t = uint_kernel<uint32_t, true>;
+using fast_uint_kernel8_t = uint_kernel<uint64_t, true>;
+using fast_uint_kernel16_t = uint_kernel<__uint128_t, true>;
+
+}  // namespace nvhm
+
+
+#if NVHM_WITH_SSE || NVHM_WITH_AVX || NVHM_WITH_AVX512
+
+#if NVHM_WITH_AVX || NVHM_WITH_AVX512 || NVHM_WITH_AVX_FVL || NVHM_WITH_AVX_BWVL || NVHM_WITH_AVX_VBMI
+#include <immintrin.h>
+#elif NVHM_WITH_SSE >= 4
+#include <smmintrin.h>
+#elif NVHM_WITH_SSE >= 3
+#include <tmmintrin.h>
+#elif NVHM_WITH_SSE >= 2
+#include <emmintrin.h>
+#endif
+
+namespace nvhm {
+
+#if NVHM_WITH_SSE >= 2
+// TODO: Splice implementations to make them separately testable.
+
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+struct sse_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m128i;
+  using lru_repr_type = __m128i;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask16_1_t;
+  using mask_type = uint32_mask16_1r_t;
+  static_assert(mask_type::max_count == size && mask_type::max_num_bits == size * 2);
   using mask_repr_type = typename mask_type::repr_type;
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  constexpr static mask_repr_type full_mask{mask_type::full()};
 
-  sse_kernel() = delete;
+  NVHM_MAKE_NOT_INSTANTIABLE_(sse_kernel);
 
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return _mm_load_si128(reinterpret_cast<const repr_type*>(assume_aligned<size>(ptr)));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     _mm_store_si128(reinterpret_cast<repr_type*>(assume_aligned<size>(ptr)), k);
   }
 
-  inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return mask_(k, _mm_set1_epi8(s));
-  }
+  inline static mask_repr_type mask(repr_type k, state_t s) noexcept { return mask_equal(k, _mm_set1_epi8(s)); }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept { return mask_not_equal(k, _mm_set1_epi8(s)); }
 
-  inline static mask_repr_type mask_hash(repr_type k) noexcept { return mask_non_hash(k) ^ 0xffff; }
-
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
+  inline static mask_repr_type mask_hash(repr_type k) noexcept { return mask_not_hash(k) ^ full_mask; }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
 #if NVHM_WITH_AVX_BWVL
     return _mm_movepi8_mask(k);
 #else
@@ -714,171 +675,264 @@ struct sse_kernel final : public kernel {
   }
 
   inline static mask_repr_type mask_empty(repr_type k) noexcept {
-#if NVHM_WITH_SSE3
-    return mask_non_hash(_mm_sign_epi8(k, k));
+#if NVHM_WITH_AVX_BWVL
+    // TODO: Less register dependencies. True. But is it faster?
+    return mask(k, empty);
 #else
-    return mask_(k, all_empty());
+#if NVHM_WITH_SSE >= 3
+    k = _mm_sign_epi8(k, k);
+#else
+    k = _mm_cmpeq_epi8(k, _mm_set1_epi8(empty));
+#endif
+    return mask_not_hash(k);
+#endif
+  }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    // TODO: Less register dependencies. True. But is it faster?
+    return mask_not(k, empty);
+#else
+#if NVHM_WITH_SSE >= 3
+    k = _mm_sign_epi8(k, k);
+#else
+    k = _mm_cmpeq_epi8(k, _mm_set1_epi8(empty));
+#endif
+    return mask_hash(k);
+#endif
+  }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm_cmpeq_epi8_mask(k0, k1);
+#else
+    return mask_not_hash(_mm_cmpeq_epi8(k0, k1));
+#endif
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm_cmpneq_epi8_mask(k0, k1);
+#else
+    return mask_hash(_mm_cmpeq_epi8(k0, k1));
 #endif
   }
 
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask_(k, all_tombstone());
-  }
+  inline static bool has(repr_type k, state_t s) noexcept { return mask(k, s) != 0; }
+  inline static bool has_not(repr_type k, state_t s) noexcept { return mask_not(k, s) != 0; }
 
-  inline static repr_type all_empty() noexcept { return _mm_set1_epi8(empty); }
-
-  inline static repr_type all_tombstone() noexcept { return _mm_set1_epi8(tombstone); }
+  inline static bool has_hash(repr_type k) noexcept { return mask_hash(k) != 0; }
+  inline static bool has_not_hash(repr_type k) noexcept { return mask_not_hash(k) != 0; }
 
   inline static bool has_empty(repr_type k) noexcept { return mask_empty(k) != 0; }
+  inline static bool has_not_empty(repr_type k) noexcept { return mask_not_empty(k) != 0; }
+  inline static bool has_tombstone(repr_type k) noexcept { return mask_tombstone(k) != 0; }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return mask_not_tombstone(k) != 0; }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_equal(k0, k1));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_not_equal(k0, k1));
+  }
 
   inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-#if NVHM_WITH_SSE4
-    k = _mm_min_epi8(k, all_tombstone());
+    repr_type t{_mm_set1_epi8(tombstone)};
+#if NVHM_WITH_SSE >= 4
+    k = _mm_min_epi8(k, t);
 #else
-    k = _mm_cmplt_epi8(k, all_tombstone());
-    k = _mm_add_epi8(k, all_tombstone());
+    k = _mm_add_epi8(_mm_cmplt_epi8(k, t), t);
 #endif
     return k;
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    return _mm_min_epu8(k, _mm_set1_epi8(empty));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm_mask_set1_epi8(k, m, empty);
+#else
+    repr_type mx{_mm_set1_epi32(m)}; // [01xy01xy 01xy01xy]
+    mx = _mm_unpacklo_epi8(mx, mx);  // [0011xxyy 0011xxyy]
+    mx = _mm_unpacklo_epi8(mx, mx);  // [00001111 xxxxyyyy]
+    mx = _mm_unpacklo_epi8(mx, mx);  // [00000000 11111111]
+    mx = _mm_and_si128(mx, _mm_set1_epi64x(0x8040'2010'0804'0201));
+    mx = _mm_cmpeq_epi8(mx, _mm_setzero_si128());
+    return blendv_epi8(_mm_set1_epi8(empty), k, mx);
+  #endif
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
     int64_t s;
 #if NVHM_WITH_AVX_VBMI
     k = _mm_permutexvar_epi8(_mm_set1_epi8(static_cast<char>(i)), k);
     s = _mm_cvtsi128_si64(k);
-#elif NVHM_WITH_SSE3
+#elif NVHM_WITH_SSE >= 3
     k = _mm_shuffle_epi8(k, _mm_set1_epi8(static_cast<char>(i)));
     s = _mm_cvtsi128_si64(k);
 #else
-    const int64_t k0{_mm_cvtsi128_si64(k)};
-    k = _mm_srli_si128(k, sizeof(int64_t));
-    const int64_t k1{_mm_cvtsi128_si64(k)};
-    s = (i < sizeof(int64_t) ? k0 : k1) >> (i % sizeof(int64_t) * 8);
+    int64_t k0{_mm_cvtsi128_si64(k)};
+    int64_t k8{_mm_cvtsi128_si64(_mm_srli_si128(k, num_bytes_v<int64_t>))};
+    s = i < num_bytes_v<int64_t> ? k0 : k8;
+    s >>= i % num_bytes_v<int64_t> * num_bits_v<state_t>;
 #endif
     return static_cast<state_t>(s);
   }
 
-  inline static repr_type min_lru(repr_type k) noexcept {
-    k = _mm_min_epu8(k, _mm_srli_si128(k, 1));
-#if NVHM_WITH_SSE4
-    k = _mm_and_si128(k, _mm_set1_epi16(0xff));
-    k = _mm_minpos_epu16(k);
-#else
-    k = _mm_min_epu8(k, _mm_srli_si128(k, 2));
-    k = _mm_min_epu8(k, _mm_srli_si128(k, 4));
-    k = _mm_min_epu8(k, _mm_srli_si128(k, 8));
-#endif
-    return k;
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return _mm_load_si128(reinterpret_cast<const lru_repr_type*>(assume_aligned<size>(ptr)));
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    repr_type s{min_lru(k)};
-#if NVHM_WITH_AVX2
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    _mm_store_si128(reinterpret_cast<lru_repr_type*>(assume_aligned<size>(ptr)), l);
+  }
+
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_repr_type s{min_reduce_epu8(l)};
+    lru_t lru{static_cast<lru_t>(_mm_cvtsi128_si32(s))};
+#if NVHM_WITH_SSE >= 3
+    s = _mm_shuffle_epi8(s, _mm_setzero_si128());
+#else
+    s = _mm_set1_epi8(static_cast<char>(lru));
+#endif
+    return {lru, mask_type::next(mask_equal(l, s))};
+
+  }
+
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    lru_repr_type s{min_reduce_epu8(l)};
+#if NVHM_WITH_AVX >= 2
     s = _mm_broadcastb_epi8(s);
-#elif NVHM_WITH_SSE3
+#elif NVHM_WITH_SSE >= 3
     s = _mm_shuffle_epi8(s, _mm_setzero_si128());
 #else
     s = _mm_set1_epi8(static_cast<char>(_mm_cvtsi128_si32(s)));
 #endif
-    return mask_(k, s);
+    return mask_equal(l, s);
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    repr_type tx{_mm_set1_epi8(static_cast<char>(t))};
+#if NVHM_WITH_AVX_BWVL
+    return _mm_cmplt_epu8_mask(l, tx);
+#else
+    return mask_not_hash(cmplt_epu8(l, tx));
+#endif
   }
 
-  inline static repr_type lru_update(const repr_type k, repr_type l, mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    m = mask_type::truncate(m);
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
 
     // Rescale if l[i] hit maximum value.
-    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & m))) {
-      __m128i tmp;
-      tmp = _mm_srli_epi64(l, 1);
-      tmp = _mm_and_si128(tmp, _mm_set1_epi8(0x7f));
-#if NVHM_WITH_AVX_BWVL
-      l = _mm_mask_blend_epi8(static_cast<__mmask16>(mask_non_hash(k)), tmp, l);
-#else
-      const __m128i msk{_mm_cmplt_epi8(k, _mm_setzero_si128())};
-#if NVHM_WITH_SSE4
-      l = _mm_blendv_epi8(tmp, l, msk);
-#else
-      l = _mm_and_si128(msk, l);
-      tmp = _mm_andnot_si128(msk, tmp);
-      l = _mm_or_si128(tmp, l);
-#endif
-#endif
+    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & n))) {
+      l = _mm_and_si128(_mm_srli_epi64(l, 1), _mm_set1_epi8(0x7f));
     }
 
     // Add 1 to l[i].
 #if NVHM_WITH_AVX_BWVL
-    l = _mm_mask_add_epi8(l, static_cast<__mmask16>(m), l, _mm_set1_epi8(1));
+    l = _mm_mask_add_epi8(l, static_cast<__mmask16>(n), l, _mm_set1_epi8(1));
 #else
-    size_t i{mask_type::next(m)};
-    const int64_t l0{static_cast<int64_t>(i < sizeof(int64_t))};
-    const int64_t l1{static_cast<int64_t>(i >= sizeof(int64_t))};
-    i = i % sizeof(int64_t) * num_bits<lru_t>;
+    int_t i{mask_type::next(n)};
+    int64_t inc_lo{i < num_bytes_v<int64_t>};
+    int64_t inc_hi{i >= num_bytes_v<int64_t>};
+    i = i % num_bytes_v<int64_t> * num_bits_v<lru_t>;
+    inc_lo <<= i;
+    inc_hi <<= i;
 
-    __m128i inc;
-    inc = _mm_cvtsi64_si128(l0 << i);
-#if NVHM_WITH_SSE4
-    inc = _mm_insert_epi64(inc, l1 << i, 1);
+    lru_repr_type inc{_mm_cvtsi64_si128(inc_lo)};
+#if NVHM_WITH_SSE >= 4
+    inc = _mm_insert_epi64(inc, inc_hi, 1);
 #else
-    inc = _mm_unpacklo_epi64(inc, _mm_cvtsi64_si128(l1 << i));
+    inc = _mm_unpacklo_epi64(inc, _mm_cvtsi64_si128(inc_hi));
 #endif
-
     l = _mm_add_epi8(l, inc);
 #endif
     return l;
   }
 
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    l = cmplt_epu8(l, _mm_set1_epi8(static_cast<char>(t)));
+    k = blendv_epi8(k, _mm_set1_epi8(0x80), l);
+    return k;
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    return static_cast<lru_t>(at(l, i));
+  }
+
  private:
-  inline static mask_repr_type mask_(repr_type k, repr_type s) noexcept {
-#if NVHM_WITH_AVX_BWVL
-    return _mm_cmpeq_epi8_mask(k, s);
+  inline static __m128i blendv_epi8(__m128i a, __m128i b, __m128i m) noexcept {
+#if NVHM_WITH_SSE >= 4
+    return _mm_blendv_epi8(a, b, m);
 #else
-    return mask_non_hash(_mm_cmpeq_epi8(k, s));
+    a = _mm_andnot_si128(m, a);
+    b = _mm_and_si128(m, b);
+    return _mm_or_si128(a, b);
 #endif
+  }
+  inline static __m128i cmplt_epu8(__m128i a, __m128i b) noexcept {
+    const __m128i bias{_mm_set1_epi8(0x80)};
+    a = _mm_xor_si128(a, bias);
+    b = _mm_xor_si128(b, bias);
+    // a < b is equivalent to b > a
+    return _mm_cmpgt_epi8(b, a);
+  }
+
+  inline static __m128i min_reduce_epu8(__m128i l) noexcept {
+    __m128i s;
+    s = _mm_min_epu8(l, _mm_srli_si128(l, 1));
+#if NVHM_WITH_SSE >= 4
+    s = _mm_and_si128(s, _mm_set1_epi16(0xff));
+    s = _mm_minpos_epu16(s);
+#else
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 2));
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 4));
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 8));
+#endif
+    return s;
   }
 };
 
 using sse_kernel_t = sse_kernel;
 #endif
 
-#if NVHM_WITH_AVX2
-struct avx_kernel final : public kernel {
+#if NVHM_WITH_AVX >= 2
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+struct avx_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m256i;
+  using lru_repr_type = __m256i;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask32_1_t;
+  using mask_type = uint32_mask32_1r_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
   using mask_repr_type = typename mask_type::repr_type;
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(avx_kernel);
 
-  avx_kernel() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
-    return _mm256_load_si256(reinterpret_cast<const __m256i*>(assume_aligned<size>(ptr)));
+  inline static repr_type load(const state_t* ptr) noexcept {
+    return _mm256_load_si256(reinterpret_cast<const repr_type*>(assume_aligned<size>(ptr)));
   }
 
-  inline static void store(const repr_type k, state_t* __restrict ptr) noexcept {
-    _mm256_store_si256(reinterpret_cast<__m256i*>(assume_aligned<size>(ptr)), k);
+  inline static void store(const repr_type k, state_t* ptr) noexcept {
+    _mm256_store_si256(reinterpret_cast<repr_type*>(assume_aligned<size>(ptr)), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return mask_(k, _mm256_set1_epi8(s));
+    return mask_equal(k, _mm256_set1_epi8(s));
+  }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask_not_equal(k, _mm256_set1_epi8(s));
   }
 
-  inline static mask_repr_type mask_hash(repr_type k) noexcept { return ~mask_non_hash(k); }
-
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
+  inline static mask_repr_type mask_hash(repr_type k) noexcept { return ~mask_not_hash(k); }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
 #if NVHM_WITH_AVX_BWVL
     return _mm256_movepi8_mask(k);
 #else
@@ -886,95 +940,161 @@ struct avx_kernel final : public kernel {
 #endif
   }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept {
-    return mask_non_hash(_mm256_sign_epi8(k, k));
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask_not_hash(_mm256_sign_epi8(k, k)); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_hash(_mm256_sign_epi8(k, k)); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm256_cmpeq_epi8_mask(k0, k1);
+#else
+    return mask_not_hash(_mm256_cmpeq_epi8(k0, k1));
+#endif
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm256_cmpneq_epi8_mask(k0, k1);
+#else
+    return mask_hash(_mm256_cmpeq_epi8(k0, k1));
+#endif
   }
 
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask_(k, all_tombstone());
-  }
+  inline static bool has(repr_type k, state_t s) noexcept { return mask(k, s) != 0; }
+  inline static bool has_not(repr_type k, state_t s) noexcept { return mask_not(k, s) != 0; }
 
-  inline static repr_type all_empty() noexcept { return _mm256_set1_epi8(empty); }
-
-  inline static repr_type all_tombstone() noexcept { return _mm256_set1_epi8(tombstone); }
+  inline static bool has_hash(repr_type k) noexcept { return mask_hash(k) != 0; }
+  inline static bool has_not_hash(repr_type k) noexcept { return mask_not_hash(k) != 0; }
 
   inline static bool has_empty(repr_type k) noexcept { return mask_empty(k) != 0; }
+  inline static bool has_not_empty(repr_type k) noexcept { return mask_not_empty(k) != 0; }
+  inline static bool has_tombstone(repr_type k) noexcept { return mask_tombstone(k) != 0; }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return mask_not_tombstone(k) != 0; }
 
-  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return _mm256_min_epi8(k, all_tombstone());
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_equal(k0, k1));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_not_equal(k0, k1));
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
+    return _mm256_min_epi8(k, _mm256_set1_epi8(tombstone));
+  }
+
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    return _mm256_min_epu8(k, _mm256_set1_epi8(empty));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+#if NVHM_WITH_AVX_BWVL
+    return _mm256_mask_set1_epi8(k, m, empty);
+#else
+    repr_type mx{_mm256_set1_epi32(m)}; // [01230123 01230123 01230123 01230123]
+    mx = _mm256_unpacklo_epi8(mx, mx);  // [00112233 00112233 00112233 00112233]
+    mx = _mm256_unpacklo_epi8(mx, mx);  // [00001111 22223333 00001111 22223333]
+    mx = _mm256_permute4x64_epi64(mx, _MM_SHUFFLE(1, 1, 0, 0));  // [00001111 00001111 22223333 22223333]
+    mx = _mm256_unpacklo_epi8(mx, mx);  // [00000000 11111111 22222222 33333333]
+    mx = _mm256_and_si256(mx, _mm256_set1_epi64x(0x8040'2010'0804'0201));
+    mx = _mm256_cmpeq_epi8(mx, _mm256_setzero_si256());
+    return _mm256_blendv_epi8(_mm256_set1_epi8(empty), k, mx);
+#endif
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    int s;
+    int32_t s;
 #if NVHM_WITH_AVX_VBMI
     k = _mm256_permutexvar_epi8(_mm256_set1_epi8(static_cast<char>(i)), k);
     s = _mm256_cvtsi256_si32(k);
 #else
-    k = _mm256_shuffle_epi8(k, _mm256_set1_epi8(static_cast<char>(i)));
-#if NVHM_WITH_AVX_FVL
-    s = _mm_cvtsi128_si32(_mm256_cvtepi64_epi8(k));
-    s >>= i / sizeof(int64_t) * 8;
-#else
-    const int k0{_mm256_cvtsi256_si32(k)};
-    const int k4{_mm256_extract_epi32(k, sizeof(__m128i) / sizeof(int32_t))};
-    s = (i < sizeof(__m128i)) ? k0 : k4;
-#endif
+    k = _mm256_permutevar8x32_epi32(k, _mm256_set1_epi32(i / num_bytes_v<int32_t>));
+    s = _mm256_cvtsi256_si32(k);
+    s >>= i % num_bytes_v<int32_t> * num_bits_v<state_t>;
 #endif
     return static_cast<state_t>(s);
   }
 
-  inline static __m128i min_lru(repr_type k) noexcept {
-    const __m128i k0{_mm256_castsi256_si128(k)};
-    const __m128i k1{_mm256_extracti128_si256(k, 1)};
-    return sse_kernel::min_lru(_mm_min_epu8(k0, k1));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return _mm256_load_si256(reinterpret_cast<const lru_repr_type*>(assume_aligned<size>(ptr)));
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask_(k, _mm256_broadcastb_epi8(min_lru(k)));
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    _mm256_store_si256(reinterpret_cast<lru_repr_type*>(assume_aligned<size>(ptr)), l);
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    __m128i s{_mm_min_epu8(_mm256_castsi256_si128(l), _mm256_extracti128_si256(l, 1))};
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 1));
+    s = _mm_and_si128(s, _mm_set1_epi16(0xff));
+    s = _mm_minpos_epu16(s);
+    lru_t lru{static_cast<lru_t>(_mm_cvtsi128_si32(s))};
+    return {lru, mask_type::next(mask_equal(l, _mm256_broadcastb_epi8(s)))};
   }
 
-  inline static repr_type lru_update(const repr_type k, repr_type l, mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    m = mask_type::truncate(m);
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    __m128i s{min_reduce_epu8(l)};
+    return mask_equal(l, _mm256_broadcastb_epi8(s));
+  }
+
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    repr_type tx{_mm256_set1_epi8(static_cast<char>(t))};
+    mask_repr_type m;
+#if NVHM_WITH_AVX_BWVL
+    m = _mm256_cmplt_epu8_mask(l, tx);
+#else
+    l = cmplt_epu8(l, tx);
+    m = static_cast<mask_repr_type>(_mm256_movemask_epi8(l));
+#endif
+    return m;
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
 
     // Rescale if l[i] hit maximum value.
-    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & m))) {
-      __m256i tmp;
-      tmp = _mm256_srli_epi64(l, 1);
-      tmp = _mm256_and_si256(tmp, _mm256_set1_epi8(0x7f));
-#if NVHM_WITH_AVX_BWVL
-      l = _mm256_mask_blend_epi8(mask_non_hash(k), tmp, l);
-#else
-      l = _mm256_blendv_epi8(l, tmp, _mm256_cmpgt_epi8(k, _mm256_set1_epi8(-1)));
-#endif
+    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & n))) {
+      l = _mm256_and_si256(_mm256_srli_epi32(l, 1), _mm256_set1_epi8(0x7f));
     }
 
     // Add 1 to l[i].
 #if NVHM_WITH_AVX_BWVL
-    l = _mm256_mask_add_epi8(l, m, l, _mm256_set1_epi8(1));
+    l = _mm256_mask_add_epi8(l, n, l, _mm256_set1_epi8(1));
 #else
-    const size_t i{mask_type::next(m)};
-    const __m128i maj{_mm_cvtsi64_si128(INT64_C(0xff) << (i / sizeof(int64_t) * num_bits<lru_t>))};
-    const __m256i min{_mm256_set1_epi64x(INT64_C(0x1) << (i % sizeof(int64_t) * num_bits<lru_t>))};
-    const __m256i inc{_mm256_and_si256(_mm256_cvtepi8_epi64(maj), min)};
-    l = _mm256_add_epi8(l, inc);
+    int_t i{mask_type::next(n)};
+    __m128i maj{_mm_cvtsi64_si128(INT64_C(0xff) << (i / sizeof(int64_t) * num_bits_v<lru_t>))};
+    __m256i min{_mm256_set1_epi64x(INT64_C(0x01) << (i % sizeof(int64_t) * num_bits_v<lru_t>))};
+    l = _mm256_add_epi8(l, _mm256_and_si256(_mm256_cvtepi8_epi64(maj), min));
 #endif
     return l;
   }
 
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    l = cmplt_epu8(l, _mm256_set1_epi8(static_cast<char>(t)));
+    k = _mm256_blendv_epi8(k, _mm256_set1_epi8(0x80), l);
+    return k;
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    return static_cast<lru_t>(at(l, i));
+  }
+
  private:
-  inline static mask_repr_type mask_(repr_type k, repr_type s) noexcept {
-#if NVHM_WITH_AVX_BWVL
-    return _mm256_cmpeq_epi8_mask(k, s);
-#else
-    return mask_non_hash(_mm256_cmpeq_epi8(k, s));
-#endif
+  inline static __m256i cmplt_epu8(__m256i a, __m256i b) noexcept {
+    __m256i bias{_mm256_set1_epi8(0x80)};
+    a = _mm256_xor_si256(a, bias);
+    b = _mm256_xor_si256(b, bias);
+    // a < b is equivalent to b > a
+    return _mm256_cmpgt_epi8(b, a);
+  }
+
+  inline static __m128i min_reduce_epu8(lru_repr_type l) noexcept {
+    __m128i s{_mm_min_epu8(_mm256_castsi256_si128(l), _mm256_extracti128_si256(l, 1))};
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 1));
+    s = _mm_and_si128(s, _mm_set1_epi16(0xff));
+    s = _mm_minpos_epu16(s);
+    return s;
   }
 };
 
@@ -982,427 +1102,699 @@ using avx_kernel_t = avx_kernel;
 #endif
 
 #if NVHM_WITH_AVX512
-struct avx512_kernel final : public kernel {
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+struct avx512_kernel final : public kernel<-128, -127, false> {
   using repr_type = __m512i;
+  using lru_repr_type = __m512i;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask64_1_t;
+  using mask_type = uint64_mask64_1r_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
   using mask_repr_type = typename mask_type::repr_type;
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(avx512_kernel);
 
-  avx512_kernel() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return _mm512_load_si512(assume_aligned<size>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     _mm512_store_si512(assume_aligned<size>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, const state_t s) noexcept {
-    return mask_(k, _mm512_set1_epi8(s));
+    return mask_equal(k, _mm512_set1_epi8(s));
+  }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask_not_equal(k, _mm512_set1_epi8(s));
   }
 
-  inline static mask_repr_type mask_hash(repr_type k) noexcept { return ~mask_non_hash(k); }
+  inline static mask_repr_type mask_hash(repr_type k) noexcept { return ~mask_not_hash(k); }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept { return _mm512_movepi8_mask(k); }
 
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
-    return _mm512_movepi8_mask(k);
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    return _mm512_cmpeq_epi8_mask(k0, k1);
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return _mm512_cmpneq_epi8_mask(k0, k1);
   }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask_(k, all_empty()); }
+  inline static bool has(repr_type k, state_t s) noexcept { return mask(k, s) != 0; }
+  inline static bool has_not(repr_type k, state_t s) noexcept { return mask_not(k, s) != 0; }
 
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask_(k, all_tombstone());
-  }
-
-  inline static repr_type all_empty() noexcept { return _mm512_set1_epi8(empty); }
-
-  inline static repr_type all_tombstone() noexcept { return _mm512_set1_epi8(tombstone); }
+  inline static bool has_hash(repr_type k) noexcept { return mask_hash(k) != 0; }
+  inline static bool has_not_hash(repr_type k) noexcept { return mask_not_hash(k) != 0; }
 
   inline static bool has_empty(repr_type k) noexcept { return mask_empty(k) != 0; }
+  inline static bool has_not_empty(repr_type k) noexcept { return mask_not_empty(k) != 0; }
+  inline static bool has_tombstone(repr_type k) noexcept { return mask_tombstone(k) != 0; }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return mask_not_tombstone(k) != 0; }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_equal(k0, k1));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_not_equal(k0, k1));
+  }
 
   inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return _mm512_min_epi8(k, all_tombstone());
+    return _mm512_min_epi8(k, _mm512_set1_epi8(tombstone));
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    return _mm512_min_epu8(k, _mm512_set1_epi8(empty));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    return _mm512_mask_set1_epi8(k, m, empty);
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    int32_t s;
 #if NVHM_WITH_AVX_VBMI
     k = _mm512_permutexvar_epi8(_mm512_set1_epi8(static_cast<char>(i)), k);
-    const int s{_mm512_cvtsi512_si32(k)};
-    return static_cast<state_t>(s);
+    s = _mm512_cvtsi512_si32(k);
 #else
-    k = _mm512_shuffle_epi8(k, _mm512_set1_epi8(static_cast<char>(i)));
-    const int64_t s{_mm_cvtsi128_si64(_mm512_cvtepi64_epi8(k))};
-    return static_cast<state_t>(s >> (i / sizeof(int64_t) * 8));
+    k = _mm512_permutexvar_epi32(_mm512_set1_epi32(i / num_bytes_v<int32_t>), k);
+    s = _mm512_cvtsi512_si32(k);
+    s >>= i % num_bytes_v<int32_t> * num_bits_v<state_t>;
 #endif
+    return static_cast<state_t>(s);
   }
 
-  inline static __m128i min_lru(const repr_type k) noexcept {
-    const __m256i k0{_mm512_castsi512_si256(k)};
-    const __m256i k1{_mm512_extracti64x4_epi64(k, 1)};
-    return avx_kernel::min_lru(_mm256_min_epu8(k0, k1));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return _mm512_load_si512(assume_aligned<size>(ptr));
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask_(k, _mm512_broadcastb_epi8(min_lru(k)));
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    _mm512_store_si512(assume_aligned<size>(ptr), l);
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    __m128i s{min_reduce_epu8(l)};
+    lru_t lru{static_cast<lru_t>(_mm_cvtsi128_si32(s))};
+    return {lru, mask_type::next(mask_equal(l, _mm512_broadcastb_epi8(s)))};
   }
 
-  inline static repr_type lru_update(const repr_type k, repr_type l, mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    m = mask_type::truncate(m);
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    __m128i s{min_reduce_epu8(l)};
+    return mask_equal(l, _mm512_broadcastb_epi8(s));
+  }
 
-    // Rescale if l[i] hit maximum value.
-    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & m))) {
-      __m512i tmp;
-      tmp = _mm512_srli_epi64(l, 1);
-      tmp = _mm512_and_si512(tmp, _mm512_set1_epi8(0x7f));
-      l = _mm512_mask_blend_epi8(mask_non_hash(k), tmp, l);
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    return _mm512_cmplt_epu8_mask(l, _mm512_set1_epi8(static_cast<char>(t)));
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
+
+    // Rescale if l[i] hits maximum value.
+    if (NVHM_UNLIKELY_(mask_type::has_next(mask(l, static_cast<state_t>(max_lru)) & n))) {
+      l = _mm512_and_si512(_mm512_srli_epi32(l, 1), _mm512_set1_epi8(0x7f));
     }
 
     // Add 1 to l[i].
-    l = _mm512_mask_add_epi8(l, m, l, _mm512_set1_epi8(1));
+    l = _mm512_mask_add_epi8(l, n, l, _mm512_set1_epi8(1));
     return l;
   }
 
- private:
-  inline static mask_repr_type mask_(repr_type k, const repr_type s) noexcept {
-    return _mm512_cmpeq_epi8_mask(k, s);
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    return to_empty(k, mask_lru_below(l, t));
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    return static_cast<lru_t>(at(l, i));
+  }
+
+ protected:
+  inline static __m128i min_reduce_epu8(lru_repr_type l) noexcept {
+    __m256i ss{_mm256_min_epu8(_mm512_castsi512_si256(l), _mm512_extracti64x4_epi64(l, 1))};
+    __m128i s{_mm_min_epu8(_mm256_castsi256_si128(ss), _mm256_extracti128_si256(ss, 1))};
+    s = _mm_min_epu8(s, _mm_srli_si128(s, 1));
+    s = _mm_and_si128(s, _mm_set1_epi16(0xff));
+    s = _mm_minpos_epu16(s);
+    return s;
   }
 };
 
 using avx512_kernel_t = avx512_kernel;
 #endif
+}
+#endif
+
 
 #if NVHM_WITH_NEON
-struct neon_kernel64 final : public kernel {
+#include <arm_neon.h>
+
+namespace nvhm {
+
+// empty: 0x80 == msb
+// tombstone: 0x81 == msb | lsb
+template <int_t Size>
+struct neon_kernel : public kernel<-128, -127, false> {
+  NVHM_MAKE_NOT_INSTANTIABLE_(neon_kernel);
+};
+
+template <>
+struct neon_kernel<8> final : public kernel<-128, -127, false> {
   using repr_type = int8x8_t;
+  using lru_repr_type = uint8x8_t;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask64_8r_t;
+  using mask_type = uint64_mask64_8l_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
+
   using mask_repr_type = typename mask_type::repr_type;
+  static_assert(num_bytes_v<mask_repr_type> == size);
+
   constexpr static mask_repr_type full_mask{mask_type::full()};
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(neon_kernel);
 
-  neon_kernel64() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return vld1_s8(assume_aligned<size>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     vst1_s8(assume_aligned<size>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return full_mask & collapse_mask_(vceq_s8(k, vdup_n_s8(s)));
+    return mask_equal(k, vdup_n_s8(s));
+  }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask_not_equal(k, vdup_n_s8(s));
   }
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vcgez_s8(k));
+    return mask_not_hash(k) ^ full_mask;
+    //return full_mask & collapse_(vcgez_s8(k));
+  }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
+    return full_mask & collapse_(vreinterpret_u8_s8(k));
+    //return full_mask & collapse_(vcltz_s8(k));
   }
 
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vcltz_s8(k));
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    return full_mask & collapse_(vceq_s8(k0, k1));
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_equal(k0, k1) ^ full_mask;
   }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vceq_s8(k, all_empty()));
+  inline static state_t min(repr_type k) noexcept { return vminv_s8(k); }
+  inline static state_t max(repr_type k) noexcept { return vmaxv_s8(k); }
+
+  inline static bool has_hash(repr_type k) noexcept { return is_hash(max(k)); }
+  inline static bool has_not_hash(repr_type k) noexcept { return is_not_hash(min(k)); }
+
+  inline static bool has(repr_type k, state_t s) noexcept {
+    return vmaxv_u8(vceq_s8(k, vdup_n_s8(s))) != 0;
+  }
+  inline static bool has_not(repr_type k, state_t s) noexcept {
+    return vminv_u8(vceq_s8(k, vdup_n_s8(s))) == 0;
   }
 
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vceq_s8(k, all_tombstone()));
+  inline static bool has_empty(repr_type k) noexcept { return min(k) == empty; }
+  inline static bool has_not_empty(repr_type k) noexcept { return max(k) != empty; }
+  inline static bool has_tombstone(repr_type k) noexcept { return has(k, tombstone); }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return has_not(k, tombstone); }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return -vaddv_s8(vreinterpret_s8_u8(vceq_s8(k0, k1)));
   }
-
-  inline static repr_type all_empty() noexcept { return vdup_n_s8(empty); }
-
-  inline static repr_type all_tombstone() noexcept { return vdup_n_s8(tombstone); }
-
-  inline static bool has_empty(repr_type k) noexcept { return vminv_s8(k) == empty; }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return size + vaddv_s8(vreinterpret_s8_u8(vceq_s8(k0, k1)));
+  }
 
   inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return vmin_s8(k, all_tombstone());
+    return vmin_s8(k, vdup_n_s8(tombstone));
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    uint8x8_t e{vreinterpret_u8_s8(vdup_n_s8(empty))};
+    return vreinterpret_s8_u8(vmin_u8(vreinterpret_u8_s8(k), e));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    uint8x8_t mx{expand_(m)};
+    return vbsl_s8(mx, vdup_n_s8(empty), k);
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
     k = vtbl1_s8(k, vdup_n_s8(static_cast<int8_t>(i)));
     return vget_lane_s8(k, 0);
   }
 
-  inline static uint8_t min_lru(repr_type k) noexcept { return vminv_u8(vreinterpret_u8_s8(k)); }
-
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask(k, static_cast<state_t>(min_lru(k)));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return vld1_u8(assume_aligned<size>(ptr));
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    const repr_type s{vreinterpret_s8_u8(vdup_n_u8(min_lru(k)))};
-    const mask_repr_type m{collapse_mask_(vceq_s8(k, s))};
-    return mask_type::next(m);
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    vst1_u8(assume_aligned<size>(ptr), l);
   }
 
-  inline static repr_type lru_update(const repr_type k, const repr_type l, const mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{vminv_u8(l)};
+    int_t idx{mask_type::next(mask_lru(l, lru))};
+    return {lru, idx};
+  }
 
-    return lru_update_(k, vreinterpret_u8_s8(l), expand_mask_(mask_type::truncate(m)));
+  inline static mask_repr_type mask_lru(lru_repr_type l, lru_t lru) noexcept {
+    return full_mask & collapse_(vceq_u8(l, vdup_n_u8(lru)));
+  }
+
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    return full_mask & collapse_(vceq_u8(l, vdup_n_u8(vminv_u8(l))));
+  }
+
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    return full_mask & collapse_(vclt_u8(l, vdup_n_u8(t)));
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
+    uint8x8_t nx{expand_(n)};
+
+    // Mask slots if they need rescaling.
+    uint64x1_t r{vreinterpret_u64_u8(vceq_u8(l, vdup_n_u8(max_lru)))};
+    r = vtst_u64(r, vreinterpret_u64_u8(nx));
+    
+    // Rescale and increment.
+    l = vshl_u8(l, vreinterpret_s8_u64(r));
+    l = vsub_u8(l, nx);
+    return l;
+  }
+
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    l = vclt_u8(l, vdup_n_u8(t));
+    return vbsl_s8(l, vdup_n_s8(empty), k);
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    l = vtbl1_u8(l, vdup_n_u8(static_cast<uint8_t>(i)));
+    return vget_lane_u8(l, 0);
   }
 
  private:
-  inline static mask_repr_type collapse_mask_(uint8x8_t m) noexcept {
+  inline static mask_repr_type collapse_(uint8x8_t m) noexcept {
     return vget_lane_u64(vreinterpret_u64_u8(m), 0);
   }
 
-  inline static uint8x8_t expand_mask_(mask_repr_type m) noexcept {
-    return vcgtz_s8(vcreate_s8(m));
-  }
-
-  inline static repr_type lru_update_(const repr_type k, uint8x8_t l, const uint8x8_t m) {
-    // Mask slots that need rescaling.
-    const uint64x1_t r64{vreinterpret_u64_u8(vand_u8(vceq_u8(l, m), m))};
-    uint8x8_t r{vreinterpret_u8_u64(vtst_u64(r64, r64))};
-    r = vand_u8(r, vcgez_s8(k));
-
-    // Rescale and increment.
-    l = vshl_u8(l, vreinterpret_s8_u8(r));
-    l = vsub_u8(l, m);
-
-    return vreinterpret_s8_u8(l);
+  inline static uint8x8_t expand_(mask_repr_type m) noexcept {
+    uint8x8_t mx{vcreate_u8(m)};
+    return vtst_u8(mx, mx);
   }
 };
 
-struct neon_kernel128 final : public kernel {
+template <>
+struct neon_kernel<16> final : public kernel<-128, -127, false> {
   using repr_type = int8x16_t;
+  using lru_repr_type = uint8x16_t;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask64_4r_t;
+  using mask_type = uint64_mask64_4r_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
+  
   using mask_repr_type = typename mask_type::repr_type;
+  static_assert(num_bytes_v<mask_repr_type> * 2 == size);
+
   constexpr static mask_repr_type full_mask{mask_type::full()};
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(neon_kernel);
 
-  neon_kernel128() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return vld1q_s8(assume_aligned<size>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     vst1q_s8(assume_aligned<size>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return full_mask & mask_(k, vdupq_n_s8(s));
+    return mask_equal(k, vdupq_n_s8(s));
+  }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask_not_equal(k, vdupq_n_s8(s));
   }
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vcgezq_s8(k));
+    return full_mask & collapse_(vcgezq_s8(k));
+  }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
+    return full_mask & collapse_(vcltzq_s8(k));
   }
 
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
-    return full_mask & collapse_mask_(vcltzq_s8(k));
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    return full_mask & collapse_(vceqq_s8(k0, k1));
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_equal(k0, k1) ^ full_mask;
   }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept {
-    return full_mask & mask_(k, all_empty());
+  inline static state_t min(repr_type k) noexcept { return vminvq_s8(k); }
+  inline static state_t max(repr_type k) noexcept { return vmaxvq_s8(k); }
+
+  inline static bool has_hash(repr_type k) noexcept { return is_hash(max(k)); }
+  inline static bool has_not_hash(repr_type k) noexcept { return is_not_hash(min(k)); }
+
+  inline static bool has(repr_type k, state_t s) noexcept {
+    return vmaxvq_u8(vceqq_s8(k, vdupq_n_s8(s))) != 0;
   }
-
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return full_mask & mask_(k, all_tombstone());
+  inline static bool has_not(repr_type k, state_t s) noexcept {
+    return vminvq_u8(vceqq_s8(k, vdupq_n_s8(s))) == 0;
   }
-
-  inline static repr_type all_empty() noexcept { return vdupq_n_s8(empty); }
-
-  inline static repr_type all_tombstone() noexcept { return vdupq_n_s8(tombstone); }
 
   inline static bool has_empty(repr_type k) noexcept { return min(k) == empty; }
+  inline static bool has_not_empty(repr_type k) noexcept { return max(k) != empty; }
+  inline static bool has_tombstone(repr_type k) noexcept { return has(k, tombstone); }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return has_not(k, tombstone); }
 
-  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return vminq_s8(k, all_tombstone());
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return -vaddvq_s8(vreinterpretq_s8_u8(vceqq_s8(k0, k1)));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return size + vaddvq_s8(vreinterpretq_s8_u8(vceqq_s8(k0, k1)));
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
+    return vminq_s8(k, vdupq_n_s8(tombstone));
+  }
+
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    uint8x16_t e{vreinterpretq_u8_s8(vdupq_n_s8(empty))};
+    return vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k), e));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    uint8x16_t mx{expand_(m)};
+    return vbslq_s8(mx, vdupq_n_s8(empty), k);
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
     k = vqtbl1q_s8(k, vdupq_n_u8(static_cast<uint8_t>(i)));
     return vgetq_lane_s8(k, 0);
   }
 
-  inline static state_t min(repr_type k) noexcept { return vminvq_s8(k); }
-
-  inline static uint8_t min_lru(repr_type k) noexcept { return vminvq_u8(vreinterpretq_u8_s8(k)); }
-
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask(k, static_cast<state_t>(min_lru(k)));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return vld1q_u8(assume_aligned<size>(ptr));
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    const repr_type s{vreinterpretq_s8_u8(vdupq_n_u8(min_lru(k)))};
-    const mask_repr_type m{collapse_mask_(vceqq_s8(k, s))};
-    return mask_type::next(m);
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    vst1q_u8(assume_aligned<size>(ptr), l);
   }
 
-  inline static repr_type lru_update(const repr_type k, const repr_type l, const mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{vminvq_u8(l)};
+    int_t idx{mask_type::next(mask_lru(l, lru))};
+    return {lru, idx};
+  }
 
-    return lru_update_(k, vreinterpretq_u8_s8(l), expand_mask_(mask_type::truncate(m)));
+  inline static mask_repr_type mask_lru(lru_repr_type l, lru_t lru) noexcept {
+    return full_mask & collapse_(vceqq_u8(l, vdupq_n_u8(lru)));
+  }
+
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    return full_mask & collapse_(vceqq_u8(l, vdupq_n_u8(vminvq_u8(l))));
+  }
+
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    return full_mask & collapse_(vcltq_u8(l, vdupq_n_u8(t)));
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
+    uint8x16_t nx{expand_(n)};
+
+    // Mask slots if they need rescaling.
+    uint32x4_t r{vreinterpretq_u32_u8(vceqq_u8(l, vdupq_n_u8(max_lru)))};
+    r = vtstq_u32(r, vreinterpretq_u32_u8(nx));
+    r = vdupq_n_u32(vmaxvq_u32(r));
+
+    // Rescale and increment.
+    l = vshlq_u8(l, vreinterpretq_s8_u32(r));
+    l = vsubq_u8(l, nx);
+    return l;
+  }
+
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    l = vcltq_u8(l, vdupq_n_u8(t));
+    return vbslq_s8(l, vdupq_n_s8(empty), k);
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    l = vqtbl1q_u8(l, vdupq_n_u8(static_cast<uint8_t>(i)));
+    return vgetq_lane_u8(l, 0);
   }
 
  private:
-  inline static mask_repr_type mask_(repr_type k, repr_type s) noexcept {
-    return collapse_mask_(vceqq_s8(k, s));
-  }
-
   /**
    * Truncate NEON 8-bit mask (0x00 or 0xff) into a 4-bit mask (0x0 or 0xf).
    * See also:
    * https://community.arm.com/arm-community-blogs/b/infrastructure-solutions-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
    */
-  inline static mask_repr_type collapse_mask_(uint8x16_t m8) noexcept {
-    const uint8x8_t m4{vshrn_n_u16(vreinterpretq_u16_u8(m8), 4)};
+  inline static mask_repr_type collapse_(uint8x16_t m8) noexcept {
+    uint8x8_t m4{vshrn_n_u16(vreinterpretq_u16_u8(m8), 4)};
     return vget_lane_u64(vreinterpret_u64_u8(m4), 0);
   }
 
-  inline static uint8x16_t expand_mask_(mask_repr_type m) noexcept {
-    const uint8x16_t m4{vreinterpretq_u8_u16(vshll_n_u8(vcreate_u8(m), 4))};
-    return vtstq_u8(m4, m4);
-  }
-
-  inline static repr_type lru_update_(const repr_type k, uint8x16_t l, const uint8x16_t m) {
-    // Mask slots that need rescaling.
-    uint8x16_t r{vandq_u8(vceqq_u8(l, m), m)};
-    r = vdupq_n_u8(vmaxvq_u8(r));
-    r = vandq_u8(r, vcgezq_s8(k));
-
-    // Rescale and increment.
-    l = vshlq_u8(l, vreinterpretq_s8_u8(r));
-    l = vsubq_u8(l, m);
-
-    return vreinterpretq_s8_u8(l);
+  inline static uint8x16_t expand_(mask_repr_type m) noexcept {
+    uint8x16_t mx{vreinterpretq_u8_u16(vshll_n_u8(vcreate_u8(m), 4))};
+    return vtstq_u8(mx, mx);
   }
 };
 
-struct neon_kernel256 final : public kernel {
+template <>
+struct neon_kernel<32> final : public kernel<-128, -127, false> {
   using repr_type = int8x16x2_t;
+  using lru_repr_type = uint8x16x2_t;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask64_2r_t;
+  using mask_type = uint64_mask64_2r_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
+  
   using mask_repr_type = typename mask_type::repr_type;
+  static_assert(num_bytes_v<mask_repr_type> * 4 == size);
+
   constexpr static mask_repr_type full_mask{mask_type::full()};
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(neon_kernel);
 
-  neon_kernel256() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return vld1q_s8_x2(assume_aligned<size>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     vst1q_s8_x2(assume_aligned<size>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return mask_(k, vdupq_n_s8(s));
+    int8x16_t sx{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], sx)};
+    uint8x16_t m1{vceqq_s8(k.val[1], sx)};
+    return collapse_(m0, m1);
+  }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return mask(k, s) ^ full_mask;
   }
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
-    return collapse_mask_(vcgezq_s8(k.val[0]), vcgezq_s8(k.val[1]));
+    uint8x16_t m0{vcgezq_s8(k.val[0])};
+    uint8x16_t m1{vcgezq_s8(k.val[1])};
+    return collapse_(m0, m1);
+  }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
+    uint8x16_t m0{vcltzq_s8(k.val[0])};
+    uint8x16_t m1{vcltzq_s8(k.val[1])};
+    return collapse_(m0, m1);
   }
 
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
-    return collapse_mask_(vcltzq_s8(k.val[0]), vcltzq_s8(k.val[1]));
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
+
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    uint8x16_t m0{vceqq_s8(k0.val[0], k1.val[0])};
+    uint8x16_t m1{vceqq_s8(k0.val[1], k1.val[1])};
+    return collapse_(m0, m1);
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_equal(k0, k1) ^ full_mask;
   }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept {
-    return mask_(k, neon_kernel128::all_empty());
-  }
+  inline static state_t min(repr_type k) noexcept { return vminvq_s8(vminq_s8(k.val[0], k.val[1])); }
+  inline static state_t max(repr_type k) noexcept { return vmaxvq_s8(vmaxq_s8(k.val[0], k.val[1])); }
 
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask_(k, neon_kernel128::all_tombstone());
+  inline static bool has_hash(repr_type k) noexcept { return is_hash(max(k)); }
+  inline static bool has_not_hash(repr_type k) noexcept { return is_not_hash(min(k)); }
+
+  inline static bool has(repr_type k, state_t s) noexcept {
+    int8x16_t t{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], t)};
+    uint8x16_t m1{vceqq_s8(k.val[1], t)};
+    return vmaxvq_u8(vmaxq_u8(m0, m1)) != 0;
+  }
+  inline static bool has_not(repr_type k, state_t s) noexcept {
+    int8x16_t t{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], t)};
+    uint8x16_t m1{vceqq_s8(k.val[1], t)};
+    return vminvq_u8(vminq_u8(m0, m1)) == 0;
   }
 
   inline static bool has_empty(repr_type k) noexcept { return min(k) == empty; }
+  inline static bool has_not_empty(repr_type k) noexcept { return max(k) != empty; }
+  inline static bool has_tombstone(repr_type k) noexcept { return has(k, tombstone); }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return has_not(k, tombstone); }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    int8x16_t m0{vreinterpretq_s8_u8(vceqq_s8(k0.val[0], k1.val[0]))};
+    int8x16_t m1{vreinterpretq_s8_u8(vceqq_s8(k0.val[1], k1.val[1]))};
+    return -vaddvq_s8(vaddq_s8(m0, m1));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    int8x16_t m0{vreinterpretq_s8_u8(vceqq_s8(k0.val[0], k1.val[0]))};
+    int8x16_t m1{vreinterpretq_s8_u8(vceqq_s8(k0.val[1], k1.val[1]))};
+    return size + vaddvq_s8(vaddq_s8(m0, m1));
+  }
 
   inline static repr_type hash_to_tombstone(repr_type k) noexcept {
+    const int8x16_t t{vdupq_n_s8(tombstone)};
+    const int8x16_t k0{vminq_s8(k.val[0], t)};
+    const int8x16_t k1{vminq_s8(k.val[1], t)};
+    return {k0, k1};
+  }
+
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    const uint8x16_t e{vreinterpretq_u8_s8(vdupq_n_s8(empty))};
     return {
-      neon_kernel128::hash_to_tombstone(k.val[0]), neon_kernel128::hash_to_tombstone(k.val[1])
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[0]), e)),
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[1]), e))
     };
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    const int8x16_t e{vdupq_n_s8(empty)};
+    uint8x16x2_t mx{expand_(m)};
+    return {
+      vbslq_s8(mx.val[0], e, k.val[0]),
+      vbslq_s8(mx.val[1], e, k.val[1])
+    };
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    const int8x16_t k0{vqtbl2q_s8(k, vdupq_n_u8(static_cast<uint8_t>(i)))};
-    return vgetq_lane_s8(k0, 0);
+    return vgetq_lane_s8(vqtbl2q_s8(k, vdupq_n_u8(static_cast<uint8_t>(i))), 0);
   }
 
-  inline static state_t min(repr_type k) noexcept {
-    return neon_kernel128::min(vminq_s8(k.val[0], k.val[1]));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return vld1q_u8_x2(assume_aligned<size>(ptr));
   }
 
-  inline static uint8_t min_lru(repr_type k) noexcept {
-    return vminvq_u8(vminq_u8(vreinterpretq_u8_s8(k.val[0]), vreinterpretq_u8_s8(k.val[1])));
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    vst1q_u8_x2(assume_aligned<size>(ptr), l);
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask(k, static_cast<state_t>(min_lru(k)));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{min_lru_(l)};
+    int_t idx{mask_type::next(mask_lru(l, lru))};
+    return {lru, idx};
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static mask_repr_type mask_lru(lru_repr_type l, lru_t lru) noexcept {
+    uint8x16_t nx{vdupq_n_u8(lru)};
+    return collapse_(vceqq_u8(l.val[0], nx), vceqq_u8(l.val[1], nx));
   }
 
-  inline static repr_type lru_update(const repr_type k, const repr_type l, const mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
+    return mask_lru(l, min_lru_(l));
+  }
 
-    return lru_update_(
-      k, vreinterpretq_u8_s8(l.val[0]), vreinterpretq_u8_s8(l.val[1]),
-      expand_mask_(mask_type::truncate(m))
-    );
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    uint8x16_t tx{vdupq_n_u8(t)};
+    return collapse_(vcltq_u8(l.val[0], tx), vcltq_u8(l.val[1], tx));
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
+    uint8x16x2_t nx{expand_(n)};
+
+    // Mask slots if they need rescaling.
+    uint8x16_t max_lru_u8{vdupq_n_u8(max_lru)};
+    uint32x4_t r0{vreinterpretq_u32_u8(vceqq_u8(l.val[0], max_lru_u8))};
+    uint32x4_t r1{vreinterpretq_u32_u8(vceqq_u8(l.val[1], max_lru_u8))};
+    r0 = vtstq_u32(r0, vreinterpretq_u32_u8(nx.val[0]));
+    r1 = vtstq_u32(r1, vreinterpretq_u32_u8(nx.val[1]));
+    r0 = vorrq_u32(r0, r1);
+    r0 = vdupq_n_u32(vmaxvq_u32(r0));
+
+    // Rescale and increment.
+    l.val[0] = vshlq_u8(l.val[0], vreinterpretq_s8_u32(r0));
+    l.val[1] = vshlq_u8(l.val[1], vreinterpretq_s8_u32(r0));
+    l.val[0] = vsubq_u8(l.val[0], nx.val[0]);
+    l.val[1] = vsubq_u8(l.val[1], nx.val[1]);
+    return l;
+  }
+
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    uint8x16_t tx{vdupq_n_u8(t)};
+    l.val[0] = vcltq_u8(l.val[0], tx);
+    l.val[1] = vcltq_u8(l.val[1], tx);
+
+    const int8x16_t e{vdupq_n_s8(empty)};
+    return {
+      vbslq_s8(l.val[0], e, k.val[0]),
+      vbslq_s8(l.val[1], e, k.val[1])
+    };
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return vgetq_lane_u8(vqtbl2q_u8(l, vdupq_n_u8(static_cast<uint8_t>(i))), 0);
   }
 
  private:
-  inline static mask_repr_type mask_(repr_type k, int8x16_t s) noexcept {
-    return collapse_mask_(vceqq_s8(k.val[0], s), vceqq_s8(k.val[1], s));
-  }
-
   /**
-   * Truncate NEON 8-bit mask (0x00 or 0xff) into a 2-bit mask (0x1 or 0x2).
+   * Truncate NEON 8-bit mask (0x00 or 0xff) into a 2-bit masks (0x1, 0x4, 0x10, 0x40).
    */
-  inline static mask_repr_type collapse_mask_(uint8x16_t m8_0, uint8x16_t m8_1) noexcept {
-    const uint8x16_t bits{vreinterpretq_u8_u32(vdupq_n_u32(UINT32_C(0x4010'0401)))};
-    m8_0 = vandq_u8(m8_0, bits);  // Isolate bits.
-    m8_1 = vandq_u8(m8_1, bits);
+  inline static mask_repr_type collapse_(uint8x16_t m8_0, uint8x16_t m8_1) noexcept {
+    // Isolate bits.
+    const uint32x4_t bits{vdupq_n_u32(UINT32_C(0x4010'0401))};
+    m8_0 = vandq_u8(m8_0, vreinterpretq_u8_u32(bits));
+    m8_1 = vandq_u8(m8_1, vreinterpretq_u8_u32(bits));
 
     m8_0 = vpaddq_u8(m8_0, m8_1);  // 01|04, 10|40, ...
     m8_0 = vpaddq_u8(m8_0, m8_0);  // 01|04|10|40, ...
@@ -1410,156 +1802,288 @@ struct neon_kernel256 final : public kernel {
     return vgetq_lane_u64(vreinterpretq_u64_u8(m8_0), 0);
   }
 
-  inline static uint8x16x2_t expand_mask_(mask_repr_type m) noexcept {
-    const uint8x16_t m2{vreinterpretq_u8_u64(vdupq_n_u64(m))};
-    const uint16x8_t m4{vreinterpretq_u16_u8(vzip1q_u8(m2, m2))};
+  inline static uint8x16x2_t expand_(mask_repr_type m) noexcept {
+    uint8x16_t m2{vreinterpretq_u8_u64(vdupq_n_u64(m))};
+
+    uint16x8_t m4{vreinterpretq_u16_u8(vzip1q_u8(m2, m2))};
 
     uint8x16_t m8_0{vreinterpretq_u8_u16(vzip1q_u16(m4, m4))};
     uint8x16_t m8_1{vreinterpretq_u8_u16(vzip2q_u16(m4, m4))};
 
-    const uint8x16_t bits{vreinterpretq_u8_u32(vdupq_n_u32(UINT32_C(0x4010'0401)))};
-    m8_0 = vtstq_u8(m8_0, bits);
-    m8_1 = vtstq_u8(m8_1, bits);
+    const uint32x4_t bits{vdupq_n_u32(UINT32_C(0x4010'0401))};
+    m8_0 = vtstq_u8(m8_0, vreinterpretq_u8_u32(bits));
+    m8_1 = vtstq_u8(m8_1, vreinterpretq_u8_u32(bits));
+
     return {m8_0, m8_1};
   }
 
-  inline static repr_type lru_update_(
-    const repr_type k, uint8x16_t l0, uint8x16_t l1, const uint8x16x2_t m
-  ) {
-    // Mask slots that need rescaling.
-    uint8x16_t r{vorrq_u8(
-      vandq_u8(vceqq_u8(l0, m.val[0]), m.val[0]), vandq_u8(vceqq_u8(l1, m.val[1]), m.val[1])
-    )};
-    r = vdupq_n_u8(vmaxvq_u8(r));
-    const uint8x16_t r0{vandq_u8(r, vcgezq_s8(k.val[0]))};
-    const uint8x16_t r1{vandq_u8(r, vcgezq_s8(k.val[1]))};
-
-    // Rescale and increment.
-    l0 = vshlq_u8(l0, vreinterpretq_s8_u8(r0));
-    l1 = vshlq_u8(l1, vreinterpretq_s8_u8(r1));
-
-    l0 = vsubq_u8(l0, m.val[0]);
-    l1 = vsubq_u8(l1, m.val[1]);
-
-    return {vreinterpretq_s8_u8(l0), vreinterpretq_s8_u8(l1)};
+  inline static lru_t min_lru_(lru_repr_type l) noexcept {
+    return vminvq_u8(vminq_u8(l.val[0], l.val[1]));
   }
 };
 
-struct neon_kernel512 final : public kernel {
+template <>
+struct neon_kernel<64> final : public kernel<-128, -127, false> {
   using repr_type = int8x16x4_t;
+  using lru_repr_type = uint8x16x4_t;
 
-  constexpr static size_t size{sizeof(repr_type)};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+  constexpr static int_t size{num_bytes_v<repr_type>};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
-  using mask_type = uint_mask64_1_t;
+  using mask_type = uint64_mask64_1r_t;
+  static_assert(mask_type::max_count == size && mask_type::fully_utilized);
+  
   using mask_repr_type = typename mask_type::repr_type;
-  constexpr static mask_repr_type full_mask{mask_type::full()};
+  static_assert(num_bytes_v<mask_repr_type> * 8 == size);
 
-  constexpr static state_t empty{-128};      // 0x80 == msb
-  constexpr static state_t tombstone{-127};  // 0x81 == msb | lsb
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(neon_kernel);
 
-  neon_kernel512() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
+  inline static repr_type load(const state_t* ptr) noexcept {
     return vld1q_s8_x4(assume_aligned<size>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
+  inline static void store(repr_type k, state_t* ptr) noexcept {
     vst1q_s8_x4(assume_aligned<size>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
-    return mask_(k, vdupq_n_s8(s));
+    int8x16_t sx{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], sx)};
+    uint8x16_t m1{vceqq_s8(k.val[1], sx)};
+    uint8x16_t m2{vceqq_s8(k.val[2], sx)};
+    uint8x16_t m3{vceqq_s8(k.val[3], sx)};
+    return collapse_(m0, m1, m2, m3);
   }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept { return ~mask(k, s); }
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
-    return collapse_mask_(
-      vcgezq_s8(k.val[0]), vcgezq_s8(k.val[1]), vcgezq_s8(k.val[2]), vcgezq_s8(k.val[3])
-    );
+    uint8x16_t m0{vcgezq_s8(k.val[0])};
+    uint8x16_t m1{vcgezq_s8(k.val[1])};
+    uint8x16_t m2{vcgezq_s8(k.val[2])};
+    uint8x16_t m3{vcgezq_s8(k.val[3])};
+    return collapse_(m0, m1, m2, m3);
+  }
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
+    uint8x16_t m0{vcltzq_s8(k.val[0])};
+    uint8x16_t m1{vcltzq_s8(k.val[1])};
+    uint8x16_t m2{vcltzq_s8(k.val[2])};
+    uint8x16_t m3{vcltzq_s8(k.val[3])};
+    return collapse_(m0, m1, m2, m3);
   }
 
-  inline static mask_repr_type mask_non_hash(repr_type k) noexcept {
-    return collapse_mask_(
-      vcltzq_s8(k.val[0]), vcltzq_s8(k.val[1]), vcltzq_s8(k.val[2]), vcltzq_s8(k.val[3])
-    );
-  }
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
 
-  inline static mask_repr_type mask_empty(repr_type k) noexcept {
-    return mask_(k, neon_kernel128::all_empty());
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    uint8x16_t m0{vceqq_s8(k0.val[0], k1.val[0])};
+    uint8x16_t m1{vceqq_s8(k0.val[1], k1.val[1])};
+    uint8x16_t m2{vceqq_s8(k0.val[2], k1.val[2])};
+    uint8x16_t m3{vceqq_s8(k0.val[3], k1.val[3])};
+    return collapse_(m0, m1, m2, m3);
   }
-
-  inline static mask_repr_type mask_tombstone(repr_type k) noexcept {
-    return mask_(k, neon_kernel128::all_tombstone());
-  }
-
-  inline static bool has_empty(repr_type k) noexcept { return min(k) == empty; }
-
-  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return {
-      neon_kernel128::hash_to_tombstone(k.val[0]),
-      neon_kernel128::hash_to_tombstone(k.val[1]),
-      neon_kernel128::hash_to_tombstone(k.val[2]),
-      neon_kernel128::hash_to_tombstone(k.val[3]),
-    };
-  }
-
-  inline static state_t at(repr_type k, size_t i) noexcept {
-    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    const int8x16_t k0{vqtbl4q_s8(k, vdupq_n_u8(static_cast<uint8_t>(i)))};
-    return vgetq_lane_s8(k0, 0);
-  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept { return ~mask_equal(k0, k1); }
 
   inline static state_t min(repr_type k) noexcept {
-    return neon_kernel128::min(vminq_s8(vminq_s8(k.val[0], k.val[1]), vminq_s8(k.val[2], k.val[3]))
-    );
+    return vminvq_s8(vminq_s8(
+      vminq_s8(k.val[0], k.val[1]),
+      vminq_s8(k.val[2], k.val[3])
+    ));
   }
-
-  inline static uint8_t min_lru(repr_type k) noexcept {
-    return vminvq_u8(vminq_u8(
-      vminq_u8(vreinterpretq_u8_s8(k.val[0]), vreinterpretq_u8_s8(k.val[1])),
-      vminq_u8(vreinterpretq_u8_s8(k.val[2]), vreinterpretq_u8_s8(k.val[3]))
+  inline static state_t max(repr_type k) noexcept {
+    return vmaxvq_s8(vmaxq_s8(
+      vmaxq_s8(k.val[0], k.val[1]),
+      vmaxq_s8(k.val[2], k.val[3])
     ));
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask(k, static_cast<state_t>(min_lru(k)));
+  inline static bool has_hash(repr_type k) noexcept { return is_hash(max(k)); }
+  inline static bool has_not_hash(repr_type k) noexcept { return is_not_hash(min(k)); }
+
+  inline static bool has(repr_type k, state_t s) noexcept {
+    int8x16_t sx{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], sx)};
+    uint8x16_t m1{vceqq_s8(k.val[1], sx)};
+    uint8x16_t m2{vceqq_s8(k.val[2], sx)};
+    uint8x16_t m3{vceqq_s8(k.val[3], sx)};
+    m0 = vmaxq_u8(m0, m1);
+    m2 = vmaxq_u8(m2, m3);
+    m0 = vmaxq_u8(m0, m2);
+    return vmaxvq_u8(m0) != 0;
+  }
+  inline static bool has_not(repr_type k, state_t s) noexcept {
+    int8x16_t sx{vdupq_n_s8(s)};
+    uint8x16_t m0{vceqq_s8(k.val[0], sx)};
+    uint8x16_t m1{vceqq_s8(k.val[1], sx)};
+    uint8x16_t m2{vceqq_s8(k.val[2], sx)};
+    uint8x16_t m3{vceqq_s8(k.val[3], sx)};
+    m0 = vminq_u8(m0, m1);
+    m2 = vminq_u8(m2, m3);
+    m0 = vminq_u8(m0, m2);
+    return vminvq_u8(m0) == 0;
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static bool has_empty(repr_type k) noexcept { return min(k) == empty; }
+  inline static bool has_not_empty(repr_type k) noexcept { return max(k) != empty; }
+  inline static bool has_tombstone(repr_type k) noexcept { return has(k, tombstone); }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return has_not(k, tombstone); }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    int8x16_t m0{vreinterpretq_s8_u8(vceqq_s8(k0.val[0], k1.val[0]))};
+    int8x16_t m1{vreinterpretq_s8_u8(vceqq_s8(k0.val[1], k1.val[1]))};
+    int8x16_t m2{vreinterpretq_s8_u8(vceqq_s8(k0.val[2], k1.val[2]))};
+    int8x16_t m3{vreinterpretq_s8_u8(vceqq_s8(k0.val[3], k1.val[3]))};
+    m0 = vaddq_s8(m0, m1);
+    m2 = vaddq_s8(m2, m3);
+    return -vaddvq_s8(vaddq_s8(m0, m2));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    int8x16_t m0{vreinterpretq_s8_u8(vceqq_s8(k0.val[0], k1.val[0]))};
+    int8x16_t m1{vreinterpretq_s8_u8(vceqq_s8(k0.val[1], k1.val[1]))};
+    int8x16_t m2{vreinterpretq_s8_u8(vceqq_s8(k0.val[2], k1.val[2]))};
+    int8x16_t m3{vreinterpretq_s8_u8(vceqq_s8(k0.val[3], k1.val[3]))};
+    m0 = vaddq_s8(m0, m1);
+    m2 = vaddq_s8(m2, m3);
+    return size + vaddvq_s8(vaddq_s8(m0, m2));
   }
 
-  inline static repr_type lru_update(const repr_type k, const repr_type l, const mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
+  inline static repr_type hash_to_tombstone(repr_type k) noexcept {
+    int8x16_t t{vdupq_n_s8(tombstone)};
+    return {
+      vminq_s8(k.val[0], t),
+      vminq_s8(k.val[1], t),
+      vminq_s8(k.val[2], t),
+      vminq_s8(k.val[3], t)
+    };
+  }
 
-    return lru_update_(
-      k, vreinterpretq_u8_s8(l.val[0]), vreinterpretq_u8_s8(l.val[1]),
-      vreinterpretq_u8_s8(l.val[2]), vreinterpretq_u8_s8(l.val[3]),
-      expand_mask_(mask_type::truncate(m))
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    uint8x16_t e{vreinterpretq_u8_s8(vdupq_n_s8(empty))};
+    return {
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[0]), e)),
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[1]), e)),
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[2]), e)),
+      vreinterpretq_s8_u8(vminq_u8(vreinterpretq_u8_s8(k.val[3]), e))
+    };
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    const int8x16_t e{vdupq_n_s8(empty)};
+    uint8x16x4_t mx{expand_(m)};
+    return {
+      vbslq_s8(mx.val[0], e, k.val[0]),
+      vbslq_s8(mx.val[1], e, k.val[1]),
+      vbslq_s8(mx.val[2], e, k.val[2]),
+      vbslq_s8(mx.val[3], e, k.val[3])
+    };
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return vgetq_lane_s8(vqtbl4q_s8(k, vdupq_n_u8(static_cast<uint8_t>(i))), 0);
+  }
+
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return vld1q_u8_x4(assume_aligned<size>(ptr));
+  }
+
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    vst1q_u8_x4(assume_aligned<size>(ptr), l);
+  }
+
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{min_lru_(l)};
+    int_t idx{mask_type::next(mask_lru(l, lru))};
+    return {lru, idx};
+  }
+
+  inline static mask_repr_type mask_lru(lru_repr_type l, lru_t lru) noexcept {
+    uint8x16_t nx{vdupq_n_u8(lru)};
+    return collapse_(
+      vceqq_u8(l.val[0], nx),
+      vceqq_u8(l.val[1], nx),
+      vceqq_u8(l.val[2], nx),
+      vceqq_u8(l.val[3], nx)
     );
+  }
+
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept { return mask_lru(l, min_lru_(l)); }
+
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    uint8x16_t tx{vdupq_n_u8(t)};
+    return collapse_(
+      vcltq_u8(l.val[0], tx),
+      vcltq_u8(l.val[1], tx),
+      vcltq_u8(l.val[2], tx),
+      vcltq_u8(l.val[3], tx)
+    );
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+    n = mask_type::truncate(n);
+    uint8x16x4_t nx{expand_(n)};
+
+    // Mask slots if they need rescaling.
+    uint8x16_t max_lru_u8{vdupq_n_u8(max_lru)};
+    uint32x4_t r0{vreinterpretq_u32_u8(vceqq_u8(l.val[0], max_lru_u8))};
+    uint32x4_t r1{vreinterpretq_u32_u8(vceqq_u8(l.val[1], max_lru_u8))};
+    uint32x4_t r2{vreinterpretq_u32_u8(vceqq_u8(l.val[2], max_lru_u8))};
+    uint32x4_t r3{vreinterpretq_u32_u8(vceqq_u8(l.val[3], max_lru_u8))};
+    r0 = vtstq_u32(r0, vreinterpretq_u32_u8(nx.val[0]));
+    r1 = vtstq_u32(r1, vreinterpretq_u32_u8(nx.val[1]));
+    r2 = vtstq_u32(r2, vreinterpretq_u32_u8(nx.val[2]));
+    r3 = vtstq_u32(r3, vreinterpretq_u32_u8(nx.val[3]));
+    r0 = vorrq_u32(vorrq_u32(r0, r1), vorrq_u32(r2, r3));
+    r0 = vdupq_n_u32(vmaxvq_u32(r0));
+
+    // Rescale and increment.
+    l.val[0] = vshlq_u8(l.val[0], vreinterpretq_s8_u32(r0));
+    l.val[1] = vshlq_u8(l.val[1], vreinterpretq_s8_u32(r0));
+    l.val[2] = vshlq_u8(l.val[2], vreinterpretq_s8_u32(r0));
+    l.val[3] = vshlq_u8(l.val[3], vreinterpretq_s8_u32(r0));
+    l.val[0] = vsubq_u8(l.val[0], nx.val[0]);
+    l.val[1] = vsubq_u8(l.val[1], nx.val[1]);
+    l.val[2] = vsubq_u8(l.val[2], nx.val[2]);
+    l.val[3] = vsubq_u8(l.val[3], nx.val[3]);
+    return l;
+  }
+
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    uint8x16_t tx{vdupq_n_u8(t)};
+    l.val[0] = vcltq_u8(l.val[0], tx);
+    l.val[1] = vcltq_u8(l.val[1], tx);
+    l.val[2] = vcltq_u8(l.val[2], tx);
+    l.val[3] = vcltq_u8(l.val[3], tx);
+
+    const int8x16_t e{vdupq_n_s8(empty)};
+    return {
+      vbslq_s8(l.val[0], e, k.val[0]),
+      vbslq_s8(l.val[1], e, k.val[1]),
+      vbslq_s8(l.val[2], e, k.val[2]),
+      vbslq_s8(l.val[3], e, k.val[3])
+    };
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return vgetq_lane_u8(vqtbl4q_u8(l, vdupq_n_u8(static_cast<uint8_t>(i))), 0);
   }
 
  private:
-  inline static mask_repr_type mask_(repr_type k, int8x16_t s) noexcept {
-    return collapse_mask_(
-      vceqq_s8(k.val[0], s), vceqq_s8(k.val[1], s), vceqq_s8(k.val[2], s), vceqq_s8(k.val[3], s)
-    );
-  }
-
   /**
-   * Truncate NEON 8-bit mask (0x00 or 0xff) into a 1-bit mask (0 or 1).
+   * Truncate NEON 8-bit mask (0x00 or 0xff) into a single-bit masks (i.e., binary 0 or 1).
    */
-  inline static mask_repr_type collapse_mask_(
+  inline static mask_repr_type collapse_(
     uint8x16_t m8_0, uint8x16_t m8_1, uint8x16_t m8_2, uint8x16_t m8_3
   ) noexcept {
-    const uint8x16_t bits{vreinterpretq_u8_u64(vdupq_n_u64(UINT64_C(0x8040'2010'0804'0201)))};
-    m8_0 = vandq_u8(m8_0, bits);  // Isolate bits.
-    m8_1 = vandq_u8(m8_1, bits);
-    m8_2 = vandq_u8(m8_2, bits);
-    m8_3 = vandq_u8(m8_3, bits);
+    // Isolate bits.
+    const uint64x2_t bits{vdupq_n_u64(UINT64_C(0x8040'2010'0804'0201))};
+    m8_0 = vandq_u8(m8_0, vreinterpretq_u8_u64(bits));
+    m8_1 = vandq_u8(m8_1, vreinterpretq_u8_u64(bits));
+    m8_2 = vandq_u8(m8_2, vreinterpretq_u8_u64(bits));
+    m8_3 = vandq_u8(m8_3, vreinterpretq_u8_u64(bits));
 
     m8_0 = vpaddq_u8(m8_0, m8_1);  // 01|02, 04|08, 10|20, 40|80, ...
     m8_2 = vpaddq_u8(m8_2, m8_3);
@@ -1569,232 +2093,352 @@ struct neon_kernel512 final : public kernel {
     return vgetq_lane_u64(vreinterpretq_u64_u8(m8_0), 0);
   }
 
-  inline static uint8x16x4_t expand_mask_(mask_repr_type m) noexcept {
-    const uint32x2_t m1{vcreate_u32(m)};
-    const uint8x16_t m1_0{vreinterpretq_u8_u32(vdupq_lane_u32(m1, 0))};
-    const uint8x16_t m1_1{vreinterpretq_u8_u32(vdupq_lane_u32(m1, 1))};
+  inline static uint8x16x4_t expand_(mask_repr_type m) noexcept {
+    uint32x2_t m1{vcreate_u32(m)};
+    uint8x16_t m1_0{vreinterpretq_u8_u32(vdupq_lane_u32(m1, 0))};
+    uint8x16_t m1_1{vreinterpretq_u8_u32(vdupq_lane_u32(m1, 1))};
 
-    const uint16x8_t m2_0{vreinterpretq_u16_u8(vzip1q_u8(m1_0, m1_0))};
-    const uint16x8_t m2_1{vreinterpretq_u16_u8(vzip1q_u8(m1_1, m1_1))};
+    uint16x8_t m2_0{vreinterpretq_u16_u8(vzip1q_u8(m1_0, m1_0))};
+    uint16x8_t m2_1{vreinterpretq_u16_u8(vzip1q_u8(m1_1, m1_1))};
 
-    const uint32x4_t m4_0{vreinterpretq_u32_u16(vzip1q_u16(m2_0, m2_0))};
-    const uint32x4_t m4_1{vreinterpretq_u32_u16(vzip1q_u16(m2_1, m2_1))};
+    uint32x4_t m4_0{vreinterpretq_u32_u16(vzip1q_u16(m2_0, m2_0))};
+    uint32x4_t m4_1{vreinterpretq_u32_u16(vzip1q_u16(m2_1, m2_1))};
 
     uint8x16_t m8_0{vreinterpretq_u8_u32(vzip1q_u32(m4_0, m4_0))};
     uint8x16_t m8_1{vreinterpretq_u8_u32(vzip2q_u32(m4_0, m4_0))};
     uint8x16_t m8_2{vreinterpretq_u8_u32(vzip1q_u32(m4_1, m4_1))};
     uint8x16_t m8_3{vreinterpretq_u8_u32(vzip2q_u32(m4_1, m4_1))};
 
-    const uint8x16_t bits{vreinterpretq_u8_u64(vdupq_n_u64(UINT64_C(0x8040'2010'0804'0201)))};
-    m8_0 = vtstq_u8(m8_0, bits);
-    m8_1 = vtstq_u8(m8_1, bits);
-    m8_2 = vtstq_u8(m8_2, bits);
-    m8_3 = vtstq_u8(m8_3, bits);
+    const uint64x2_t bits{vdupq_n_u64(UINT64_C(0x8040'2010'0804'0201))};
+    m8_0 = vtstq_u8(m8_0, vreinterpretq_u8_u64(bits));
+    m8_1 = vtstq_u8(m8_1, vreinterpretq_u8_u64(bits));
+    m8_2 = vtstq_u8(m8_2, vreinterpretq_u8_u64(bits));
+    m8_3 = vtstq_u8(m8_3, vreinterpretq_u8_u64(bits));
     return {m8_0, m8_1, m8_2, m8_3};
   }
 
-  inline static repr_type lru_update_(
-    const repr_type k, uint8x16_t l0, uint8x16_t l1, uint8x16_t l2, uint8x16_t l3,
-    const uint8x16x4_t m
-  ) {
-    // Mask slots that need rescaling.
-    uint8x16_t r{vorrq_u8(
-      vorrq_u8(
-        vandq_u8(vceqq_u8(l0, m.val[0]), m.val[0]), vandq_u8(vceqq_u8(l1, m.val[1]), m.val[1])
-      ),
-      vorrq_u8(
-        vandq_u8(vceqq_u8(l2, m.val[2]), m.val[2]), vandq_u8(vceqq_u8(l3, m.val[3]), m.val[3])
-      )
-    )};
-    r = vdupq_n_u8(vmaxvq_u8(r));
-    const uint8x16_t r0{vandq_u8(r, vcgezq_s8(k.val[0]))};
-    const uint8x16_t r1{vandq_u8(r, vcgezq_s8(k.val[1]))};
-    const uint8x16_t r2{vandq_u8(r, vcgezq_s8(k.val[2]))};
-    const uint8x16_t r3{vandq_u8(r, vcgezq_s8(k.val[3]))};
-
-    // Rescale and increment.
-    l0 = vshlq_u8(l0, vreinterpretq_s8_u8(r0));
-    l1 = vshlq_u8(l1, vreinterpretq_s8_u8(r1));
-    l2 = vshlq_u8(l2, vreinterpretq_s8_u8(r2));
-    l3 = vshlq_u8(l3, vreinterpretq_s8_u8(r3));
-
-    l0 = vsubq_u8(l0, m.val[0]);
-    l1 = vsubq_u8(l1, m.val[1]);
-    l2 = vsubq_u8(l2, m.val[2]);
-    l3 = vsubq_u8(l3, m.val[3]);
-
-    return {
-      vreinterpretq_s8_u8(l0), vreinterpretq_s8_u8(l1), vreinterpretq_s8_u8(l2),
-      vreinterpretq_s8_u8(l3)
-    };
+  inline static lru_t min_lru_(lru_repr_type l) noexcept {
+    return vminvq_u8(vminq_u8(
+      vminq_u8(l.val[0], l.val[1]),
+      vminq_u8(l.val[2], l.val[3])
+    ));
   }
 };
 
-using neon_kernel64_t = neon_kernel64;
-using neon_kernel128_t = neon_kernel128;
-using neon_kernel256_t = neon_kernel256;
-using neon_kernel512_t = neon_kernel512;
+using neon_kernel8_t = neon_kernel<8>;
+using neon_kernel16_t = neon_kernel<16>;
+using neon_kernel32_t = neon_kernel<32>;
+using neon_kernel64_t = neon_kernel<64>;
+
+}  // namespace nvhm
 #endif
 
-#if NVHM_WITH_SVE
-template <size_t Size>
-struct sve_kernel final : public kernel {
-  using repr_type = svint8_t;
 
-  constexpr static size_t size{Size};
-  static_assert(has_single_bit(size));
-  constexpr static size_t size_mask{size - 1};
+#if NVHM_WITH_SVE
+#include <arm_sve.h>
+
+namespace nvhm {
+
+// We use valuse that can be used as immediates in SVE comparison ops.
+// empty: -16
+// tombstone: -15
+template <int_t Size>
+struct sve_kernel final : public kernel<-16, -15, false> {
+#if defined(__ARM_FEATURE_SVE_BITS) && (NVHM_WITH_SVE_SIZE * 8 <= __ARM_FEATURE_SVE_BITS)
+  using repr_type = svint8_t __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
+  using lru_repr_type = svuint8_t __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
+#else
+  using repr_type = svint8_t;
+  using lru_repr_type = svuint8_t;
+#endif
+
+  constexpr static int_t size{Size};
+  constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = sve_mask<size>;
   using mask_repr_type = typename mask_type::repr_type;
 
-  constexpr static state_t empty{-16};      // Can be used as an immediate for SVE comparison ops.
-  constexpr static state_t tombstone{-15};  // Can be used as an immediate for SVE comparison ops.
-  static_assert(empty < tombstone && tombstone < 0);
+  NVHM_MAKE_NOT_INSTANTIABLE_(sve_kernel);
 
-  sve_kernel() = delete;
-
-  inline static repr_type load(const state_t* __restrict ptr) noexcept {
-    return svld1_s8(mask_type::full(), assume_aligned<size>(ptr));
+  inline static repr_type load(const state_t* ptr) noexcept {
+    return svld1_s8(mask_type::full(), assume_aligned<std::min(size, cache_line_size)>(ptr));
   }
 
-  inline static void store(repr_type k, state_t* __restrict ptr) noexcept {
-    svst1_s8(mask_type::full(), assume_aligned<size>(ptr), k);
+  inline static void store(repr_type k, state_t* ptr) noexcept {
+    svst1_s8(mask_type::full(), assume_aligned<std::min(size, cache_line_size)>(ptr), k);
   }
 
   inline static mask_repr_type mask(repr_type k, state_t s) noexcept {
     return svcmpeq_n_s8(mask_type::full(), k, s);
   }
+  inline static mask_repr_type mask_not(repr_type k, state_t s) noexcept {
+    return svcmpne_n_s8(mask_type::full(), k, s);
+  }
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
     return svcmpge_n_s8(mask_type::full(), k, 0);
   }
-
-  inline static mask_repr_type mask_non_hash(const repr_type k) noexcept {
+  inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
     return svcmplt_n_s8(mask_type::full(), k, 0);
   }
 
-  inline static mask_repr_type mask_empty(const repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
+  inline static mask_repr_type mask_not_empty(repr_type k) noexcept { return mask_not(k, empty); }
+  inline static mask_repr_type mask_tombstone(repr_type k) noexcept { return mask(k, tombstone); }
+  inline static mask_repr_type mask_not_tombstone(repr_type k) noexcept { return mask_not(k, tombstone); }
 
-  inline static mask_repr_type mask_tombstone(const repr_type k) noexcept {
-    return mask(k, tombstone);
+  inline static mask_repr_type mask_equal(repr_type k0, repr_type k1) noexcept {
+    return svcmpeq_s8(mask_type::full(), k0, k1);
+  }
+  inline static mask_repr_type mask_not_equal(repr_type k0, repr_type k1) noexcept {
+    return svcmpne_s8(mask_type::full(), k0, k1);
   }
 
-  inline static bool has_empty(const repr_type k) noexcept {
-    return mask_type::has_next(mask_empty(k));
+  inline static bool has(repr_type k, state_t s) noexcept { return mask_type::has_next(mask(k, s)); }
+  inline static bool has_not(repr_type k, state_t s) noexcept { return mask_type::has_next(mask_not(k, s)); }
+
+  inline static bool has_hash(repr_type k) noexcept { return mask_type::has_next(mask_hash(k)); }
+  inline static bool has_not_hash(repr_type k) noexcept { return mask_type::has_next(mask_not_hash(k)); }
+
+  inline static bool has_empty(repr_type k) noexcept { return has(k, empty); }
+  inline static bool has_not_empty(repr_type k) noexcept { return has_not(k, empty); }
+  inline static bool has_tombstone(repr_type k) noexcept { return has(k, tombstone); }
+  inline static bool has_not_tombstone(repr_type k) noexcept { return has_not(k, tombstone); }
+
+  inline static int_t count_equal(repr_type k0, repr_type k1) noexcept {
+    return mask_type::count(mask_equal(k0, k1));
+  }
+  inline static int_t count_not_equal(repr_type k0, repr_type k1) noexcept {
+    return size - count_equal(k0, k1);
   }
 
   inline static repr_type hash_to_tombstone(repr_type k) noexcept {
-    return svmin_n_s8_x(mask_type::full(), k, tombstone);
+    return svmin_n_s8_x(svptrue_b8(), k, tombstone);
   }
 
-  inline static state_t at(repr_type k, size_t i) noexcept {
+  inline static repr_type not_hash_to_empty(repr_type k) noexcept {
+    return svreinterpret_s8_u8(svmin_n_u8_x(svptrue_b8(), svreinterpret_u8_s8(k), static_cast<uint8_t>(empty)));
+  }
+
+  inline static repr_type to_empty(repr_type k, mask_repr_type m) noexcept {
+    return svdup_n_s8_m(k, m, empty);
+  }
+
+  inline static state_t at(repr_type k, int_t i) noexcept {
     NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
-    k = svtbl_s8(k, svdup_n_u8(static_cast<uint8_t>(i)));
-    return svlasta_s8(svpfalse_b(), k);
+    return svlasta_s8(mask_type::until(i), k);
   }
 
-  inline static uint8_t min_lru(repr_type k) noexcept {
-    return svminv_u8(mask_type::full(), svreinterpret_u8(k));
+  inline static lru_repr_type load_lru(const lru_t* ptr) noexcept {
+    return svld1_u8(mask_type::full(), assume_aligned<size>(ptr));
   }
 
-  inline static mask_repr_type mask_min_lru(repr_type k) noexcept {
-    return mask(k, static_cast<state_t>(min_lru(k)));
+  inline static void store_lru(lru_repr_type l, lru_t* ptr) noexcept {
+    svst1_u8(mask_type::full(), assume_aligned<size>(ptr), l);
   }
 
-  inline static size_t min_lru_index(repr_type k) noexcept {
-    return mask_type::next(mask_min_lru(k));
+  inline static std::pair<lru_t, int_t> min_lru(lru_repr_type l) noexcept {
+    lru_t lru{min_lru_(l)};
+    int_t idx{mask_type::next(mask_lru(l, lru))};
+    return {lru, idx};
   }
 
-  inline static repr_type lru_update(const repr_type k, const repr_type l, const mask_repr_type m) {
-    NVHM_ASSERT_(mask_type::has_next(m) && mask_type::next(m) < size, "m = ", render_mask<mask_type>(m));
-    NVHM_ASSERT_(slot_is_occupied(at(k, mask_type::next(m))));
-
-    return lru_update_(k, svreinterpret_u8(l), mask_type::truncate(m));
+  inline static mask_repr_type mask_lru(lru_repr_type l, lru_t lru) noexcept {
+    return svcmpeq_n_u8(mask_type::full(), l, lru);
   }
 
- private:
-  inline static repr_type lru_update_(const repr_type k, svuint8_t l, const mask_repr_type m) {
-    // Mask slots that need rescaling.
-    svbool_t r{svcmpeq_n_u8(m, l, 0xff)};
-    r = svbrkn_b_z(m, r, mask_hash(k));
+  inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept { return mask_lru(l, min_lru_(l)); }
+
+  inline static mask_repr_type mask_lru_below(lru_repr_type l, lru_t t) noexcept {
+    return svcmplt_n_u8(mask_type::full(), l, t);
+  }
+
+  inline static lru_repr_type update_lru(lru_repr_type l, mask_repr_type n) noexcept {
+    NVHM_ASSERT_(mask_type::has_next(n) && mask_type::next(n) < size, "n = ", render_mask<mask_type>(n));
+
+    // Mask slots if they need rescaling.
+    svbool_t r{svcmpeq_n_u8(n, l, max_lru)};
+    n = mask_type::truncate(n);
+    r = svbrkn_b_z(n, r, mask_type::full());
 
     // Rescale and increment.
     l = svlsr_n_u8_m(r, l, 1);
-    l = svadd_n_u8_m(m, l, 1);
+    l = svadd_n_u8_m(n, l, 1);
 
-    return svreinterpret_s8(l);
+    return l;
+  }
+
+  inline static repr_type to_empty_if_lru_below(repr_type k, lru_repr_type l, lru_t t) noexcept {
+    return to_empty(k, mask_lru_below(l, t));
+  }
+
+  inline static lru_t lru_at(lru_repr_type l, int_t i) noexcept {
+    NVHM_ASSERT_(i < size, "i = ", i, ", size = ", size);
+    return svlasta_u8(mask_type::until(i), l);
+  }
+
+ private:
+  inline static lru_t min_lru_(lru_repr_type l) noexcept {
+    return svminv_u8(mask_type::full(), l);
   }
 };
 
-using sve_kernel8_t = sve_kernel<1>;
-using sve_kernel16_t = sve_kernel<2>;
-using sve_kernel32_t = sve_kernel<4>;
-using sve_kernel64_t = sve_kernel<8>;
-using sve_kernel128_t = sve_kernel<16>;
-using sve_kernel256_t = sve_kernel<32>;
-using sve_kernel512_t = sve_kernel<64>;
-using sve_kernel1024_t = sve_kernel<128>;
-using sve_kernel2048_t = sve_kernel<256>;
+template <>
+constexpr int_t num_bytes_v<svint8_t>{NVHM_WITH_SVE_SIZE};
+template <>
+constexpr int_t num_bytes_v<svuint8_t>{NVHM_WITH_SVE_SIZE};
+
+#if NVHM_WITH_SVE_SIZE >= 1
+using sve_kernel1_t = sve_kernel<1>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 2
+using sve_kernel2_t = sve_kernel<2>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 4
+using sve_kernel4_t = sve_kernel<4>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 8
+using sve_kernel8_t = sve_kernel<8>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 16
+using sve_kernel16_t = sve_kernel<16>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 32
+using sve_kernel32_t = sve_kernel<32>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 64
+using sve_kernel64_t = sve_kernel<64>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 128
+using sve_kernel128_t = sve_kernel<128>;
+#endif
+#if NVHM_WITH_SVE_SIZE >= 256
+using sve_kernel256_t = sve_kernel<256>;
 #endif
 
-using default_kernel8_t = uint_kernel8_t;
-using default_kernel16_t = uint_kernel16_t;
-using default_kernel32_t = uint_kernel32_t;
+}  // namespace nvhm
+#endif
 
-#if NVHM_WITH_SVE && NVHM_WITH_SVE_OVER_NEON
-using default_kernel64_t =
-  std::conditional_t<prefer_sve_over_neon, sve_kernel64_t, neon_kernel64_t>;
+namespace nvhm {
+
+template <int_t Size>
+struct default_kernel;
+  
+template <>
+struct default_kernel<1> {
+  // TODO: Prefer SVE if available?
+  using type = fast_uint_kernel1_t;
+};
+
+template <>
+struct default_kernel<2> {
+  // TODO: Prefer SVE if available?
+  using type = fast_uint_kernel2_t;
+};
+
+template <>
+struct default_kernel<4> {
+  // TODO: Prefer SVE if available?
+  // TODO: MMX?
+  using type = fast_uint_kernel4_t;
+};
+
+template <>
+struct default_kernel<8> {
+#if NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 8
+  // TODO: Is this really better?
+  using type = sve_kernel8_t;
 #elif NVHM_WITH_NEON
-using default_kernel64_t = neon_kernel64_t;
+  using type = neon_kernel8_t;
 #else
-using default_kernel64_t = uint_kernel64_t;
+  using type = fast_uint_kernel8_t;
 #endif
+};
 
-#if NVHM_WITH_SSE2
-using default_kernel128_t = sse_kernel_t;
-#elif NVHM_WITH_SVE
-using default_kernel128_t =
-  std::conditional_t<prefer_sve_over_neon, sve_kernel128_t, neon_kernel128_t>;
+template <>
+struct default_kernel<16> {
+#if NVHM_WITH_SSE >= 2
+  using type = sse_kernel_t;
+#elif NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 16
+  using type = sve_kernel16_t;
 #elif NVHM_WITH_NEON
-using default_kernel128_t = neon_kernel128_t;
+  using type = neon_kernel16_t;
 #else
-using default_kernel128_t = uint_kernel128_t;
+  using type = fast_uint_kernel16_t;
 #endif
+};
 
-#if NVHM_WITH_AVX2
-using default_kernel256_t = avx_kernel_t;
-#elif NVHM_WITH_SVE && __ARM_FEATURE_SVE_BITS >= 256
-using default_kernel256_t =
-  std::conditional_t<prefer_sve_over_neon, sve_kernel256_t, neon_kernel256_t>;
+template <>
+struct default_kernel<32> {
+#if NVHM_WITH_AVX >= 2
+  using type = avx_kernel_t;
+#elif NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 32
+  using type = sve_kernel32_t;
 #elif NVHM_WITH_NEON
-using default_kernel256_t = neon_kernel256_t;
+  using type = neon_kernel32_t;
 #else
-using default_kernel256_t = array_kernel256_t;
+  using type = array_kernel32_t;
 #endif
+};
 
+template <>
+struct default_kernel<64> {
 #if NVHM_WITH_AVX512
-using default_kernel512_t = avx512_kernel_t;
-#elif NVHM_WITH_SVE && __ARM_FEATURE_SVE_BITS >= 512
-using default_kernel512_t =
-  std::conditional_t<prefer_sve_over_neon, sve_kernel512_t, neon_kernel512_t>;
+  using type = avx512_kernel_t;
+#elif NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 64
+  using type = sve_kernel64_t;
 #elif NVHM_WITH_NEON
-using default_kernel512_t = neon_kernel512_t;
+  using type = neon_kernel64_t;
 #else
-using default_kernel512_t = array_kernel512_t;
+  using type = array_kernel64_t;
 #endif
+};
 
-#if NVHM_WITH_SVE && __ARM_FEATURE_SVE_BITS >= 1024
-using default_kernel1024_t = sve_kernel1024_t;
+template <>
+struct default_kernel<128> {
+#if NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 128
+  using type = sve_kernel128_t;
 #else
-using default_kernel1024_t = array_kernel1024_t;
+  using type = array_kernel128_t;
 #endif
+};
 
-#if NVHM_WITH_SVE && __ARM_FEATURE_SVE_BITS >= 2048
-using default_kernel2048_t = arm_sve_kernel2048_t;
+template <>
+struct default_kernel<256> {
+#if NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 256
+  using type = sve_kernel256_t;
+#else
+  using type = array_kernel256_t;
 #endif
+};
 
-using default_kernel_t = std::conditional_t<
-  std::is_same_v<default_kernel128_t, uint_kernel128_t>, default_kernel64_t, default_kernel128_t>;
+template <>
+struct default_kernel<512> {
+  using type = array_kernel512_t;
+};
+
+using default_kernel1_t = typename default_kernel<1>::type;
+using default_kernel2_t = typename default_kernel<2>::type;
+using default_kernel4_t = typename default_kernel<4>::type;
+using default_kernel8_t = typename default_kernel<8>::type;
+using default_kernel16_t = typename default_kernel<16>::type;
+using default_kernel32_t = typename default_kernel<32>::type;
+using default_kernel64_t = typename default_kernel<64>::type;
+using default_kernel128_t = typename default_kernel<128>::type;
+using default_kernel256_t = typename default_kernel<256>::type;
+using default_kernel512_t = typename default_kernel<512>::type;
+
+constexpr int_t default_kernel_size{
+#if NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 16
+  num_bytes_v<svint8_t>
+#elif NVHM_WITH_SSE >= 2
+  sse_kernel_t::size
+#else
+  sizeof(int_t)
+#endif
+};
+
+template <int_t Size = default_kernel_size>
+using default_kernel_t = typename default_kernel<Size>::type;
 
 }  // namespace nvhm

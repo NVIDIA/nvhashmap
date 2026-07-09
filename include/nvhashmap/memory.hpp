@@ -18,47 +18,67 @@
 #pragma once
 
 #include "common.hpp"
-#include "debug.hpp"
 
-#if NVHM_WITH_SSE_PREFETCH
+
+namespace nvhm {
+
+namespace detail {
+  
+#if defined(__aarch64__)
+template <bool store>
+inline void arm64_rprfm(const std::byte* __restrict p, int_t n) noexcept {
+  constexpr int_t min_block_size{1};
+  constexpr int_t max_block_size{1 << 20};
+  constexpr int_t max_block_count{(1 << 16) - 1};
+
+  const int_t block_size{std::min(std::max(n, min_block_size), max_block_size)};
+  const int_t block_count{std::min((n + block_size - 1) / block_size, max_block_count)};
+  constexpr int_t block_stride{};
+  constexpr int_t reuse_dist{};
+  const int_t meta{(reuse_dist << 60) | (block_stride << 38) | (block_count << 22) | block_size};
+
+  if constexpr (store) {
+    asm volatile("rprfm   pststrm, %0, [%1]" : : "r"(meta), "r"(p) : "memory");
+  } else {
+    asm volatile("rprfm   pldstrm, %0, [%1]" : : "r"(meta), "r"(p) : "memory");
+  }
+}
+#endif
+
+}  // namespace detail
+
+}  // namespace nvhm
+
+#include <cstring>
+
+#if NVHM_WITH_SSE
 #include <xmmintrin.h>
 #endif
 
 namespace nvhm {
 
-#if defined(__aarch64__)
-template <bool store>
-inline void range_prefetch(const char* __restrict p, size_t n) noexcept {
-  constexpr size_t max_block_size{1 << 20};
-  constexpr size_t max_block_count{(1 << 16) - 1};
-
-  const size_t block_size{std::min(n, max_block_size)};
-  const size_t block_count{std::max(n / max_block_size, max_block_count)};
-  constexpr size_t block_stride{};
-  constexpr size_t reuse_dist{};
-  const size_t meta{(reuse_dist << 60) | (block_stride << 38) | (block_count << 22) | block_size};
-
-  if constexpr (store) {
-    asm volatile("rprfm   pststrm, %0, [%1]" : : "r"(p), "r"(meta) : "memory");
-  } else {
-    asm volatile("rprfm   pldstrm, %0, [%1]" : : "r"(p), "r"(meta) : "memory");
-  }
+template <typename T, int_t Alignment = num_bytes_v<T>>
+inline void read_prefetch(const T* p, int_t n) noexcept {
+  static_assert(Alignment % num_bytes_v<T> == 0);
+  read_prefetch(reinterpret_cast<const std::byte*>(assume_aligned<Alignment>(p)), n * num_bytes_v<T>);
 }
-#endif
 
 /**
  * Issues load prefetch instructions for a block of memory.
  */
-inline void read_prefetch(const char* __restrict p, const size_t n) noexcept {
+template <>
+inline void read_prefetch<std::byte>(const std::byte* __restrict p, int_t n) noexcept {
 #if defined(__aarch64__)
   if constexpr (use_range_prefetch) {
-    range_prefetch<false>(p, n);
-  } else
+    detail::arm64_rprfm<false>(p, n);
+    return;
+  }
 #endif
-  {
-    for (size_t i{}; i < n; i += cache_line_size) {
-#if NVHM_WITH_SSE_PREFETCH
-      _mm_prefetch(&p[i], []() {
+
+  for (int_t i{}; i < n; i += cache_line_size) {
+#if NVHM_WITH_SSE
+    if constexpr (use_sse_prefetch) {
+      constexpr int hint{[]() {
         if constexpr (prefetch_cache_level == 1) {
           return _MM_HINT_T0;
         } else if constexpr (prefetch_cache_level == 2) {
@@ -68,56 +88,101 @@ inline void read_prefetch(const char* __restrict p, const size_t n) noexcept {
         } else {
           return _MM_HINT_NTA;
         }
-      }());
-#else
-      constexpr size_t hint{4 - std::min(prefetch_cache_level, 4)};
-      static_assert(hint >= 0 && hint <= 3);
-      __builtin_prefetch(&p[i], 0, hint);
-#endif
+      }()};
+      _mm_prefetch(&p[i], hint);
+      continue;
     }
+#endif
+
+    constexpr int hint{4 - std::min(prefetch_cache_level, 4)};
+    static_assert(hint >= 0 && hint <= 3);
+    __builtin_prefetch(&p[i], 0, hint);
   }
 }
 
-template <size_t Alignment, typename T>
-inline void read_prefetch(const T* p, const size_t n = Alignment) noexcept {
-  static_assert(Alignment >= sizeof(T));
-  NVHM_ASSERT_(Alignment <= n);
-  read_prefetch(reinterpret_cast<const char*>(assume_aligned<Alignment>(p)), n);
+template <int_t N, typename T, int_t Alignment = num_bytes_v<T>>
+constexpr void read_prefetch(const T* p) noexcept { read_prefetch<T, Alignment>(p, N); }
+
+template <typename T, int_t Alignment = num_bytes_v<T>>
+inline void write_prefetch(T* p, int_t n) noexcept {
+  static_assert(Alignment % num_bytes_v<T> == 0);
+  write_prefetch(reinterpret_cast<std::byte*>(assume_aligned<Alignment>(p)), n * num_bytes_v<T>);
 }
 
 /**
  * Issues store prefetch instructions for a block of memory.
  */
-inline void write_prefetch(char* __restrict p, const size_t n) noexcept {
+template <>
+inline void write_prefetch<std::byte>(std::byte* __restrict p, int_t n) noexcept {
 #if defined(__aarch64__)
   if constexpr (use_range_prefetch) {
-    range_prefetch<true>(p, n);
-  } else
+    detail::arm64_rprfm<true>(p, n);
+    return;
+  }
 #endif
-  {
-    for (size_t i{}; i < n; i += cache_line_size) {
-#if NVHM_WITH_SSE_PREFETCH
-      _mm_prefetch(&p[i], []() {
-        if constexpr (prefetch_cache_level == 1) {
-          return _MM_HINT_ET0;
-        } else {
-          return _MM_HINT_ET1;
-        }
-      }());
-#else
-      constexpr int hint{4 - std::max(prefetch_cache_level, 4)};
-      static_assert(hint >= 0 && hint <= 3);
-      __builtin_prefetch(&p[i], 1, hint);
-#endif
+
+  for (int_t i{}; i < n; i += cache_line_size) {
+#if NVHM_WITH_SSE
+    if constexpr (use_sse_prefetch) {
+      constexpr int hint{prefetch_cache_level == 1 ? _MM_HINT_ET0 : _MM_HINT_ET1};
+      _mm_prefetch(&p[i], hint);
+      continue;
     }
+#endif
+
+    constexpr int hint{4 - std::min(prefetch_cache_level, 4)};
+    static_assert(hint >= 0 && hint <= 3);
+    __builtin_prefetch(&p[i], 1, hint);
   }
 }
 
-template <size_t Alignment, typename T>
-inline void write_prefetch(T* p, const size_t n = Alignment) noexcept {
-  static_assert(Alignment >= sizeof(T));
-  NVHM_ASSERT_(Alignment <= n);
-  write_prefetch(reinterpret_cast<char*>(assume_aligned<Alignment>(p)), n);
+template <int_t N, typename T, int_t Alignment = num_bytes_v<T>>
+constexpr void write_prefetch(T* p) noexcept { write_prefetch<T, Alignment>(p, N); }
+
+}  // namespace nvhm
+
+#if NVHM_WITH_SVE
+#include <arm_sve.h>
+#endif
+
+namespace nvhm {
+
+namespace detail {
+/**
+ * Lightweight memcpy for blobs.
+ */
+inline void copy_blob(int8_t* __restrict dst, const int8_t* __restrict src, int_t n) noexcept {
+#if NVHM_WITH_SVE
+  // SVE fast-path considered but disabled: only outperforms memcpy for very small copies,
+  // and typical blob strides are aligned, so memcpy wins in the common case.
+  if constexpr (false && use_sve_copy) {
+    int_t i{};
+    do {
+      svbool_t p{svwhilelt_b8(i, n)};
+      svst1_s8(p, &dst[i], svld1_s8(p, &src[i]));
+      i += svcntb();
+      // `while (svptest_last(svptrue_b8(), p))` would save one instruction per iteration,
+      // but runs through the loop again if the `n` is aligned with the SVE register
+      // size. Unfortunately, most times, the blob array is likely aligned.
+    } while (i < n);
+    return;
+  }
+#endif
+
+  std::memcpy(dst, src, to_uint(n));
+}
+}  // namespace detail
+
+inline void copy_blob(std::byte* dst, const void* src, int_t n) noexcept {
+  return detail::copy_blob(reinterpret_cast<int8_t*>(dst), reinterpret_cast<const int8_t*>(src), n);
+}
+
+inline void copy_blob(void* dst, const std::byte* src, int_t n) noexcept {
+  return detail::copy_blob(static_cast<int8_t*>(dst), reinterpret_cast<const int8_t*>(src), n);
+}
+
+inline void copy_blob(std::byte* dst, const std::byte* src, int_t n) noexcept {
+  return detail::copy_blob(reinterpret_cast<int8_t*>(dst), reinterpret_cast<const int8_t*>(src), n);
 }
 
 }  // namespace nvhm

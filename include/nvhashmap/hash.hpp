@@ -26,13 +26,13 @@ namespace nvhm {
  * |    6          5          4          3          2          1            |
  * | 3210 9876543210 9876543210 9876543210 9876543210 9876543210 9876543210 |
  * | <-------------------------------------------------------------><-----> |
- * | HHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHSSSSSSS |
+ * | RRRR RRRRRRRRRR HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHSSSSSSS |
  *
  * hash layout (monkey_wrench):
  * |    6          5          4          3          2          1            |
  * | 3210 9876543210 9876543210 9876543210 9876543210 9876543210 9876543210 |
  * | <------><------------------------------------------------------------> |
- * | SSSS SSSHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH |
+ * | SSSS SSSRRRRRRR RRRRRRRHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH HHHHHHHHHH |
  *
  * 7 bits = state / fingerprint
  * 57 bits = hashspace
@@ -44,11 +44,65 @@ namespace nvhm {
  * logic operation by taking advantage of the CPU zero-extending right shifts.
  */
 using hash_t = uint64_t;
-static_assert(std::is_unsigned_v<hash_t> && sizeof(hash_t) > sizeof(state_t));
+static_assert(is_unsigned_v<hash_t> && sizeof(hash_t) >= sizeof(int_t));
+
+template <int_t KernelSize>
+constexpr raw_pos_t hash_to_pos(hash_t h) noexcept {
+  static_assert(has_single_bit(KernelSize));
+  constexpr int_t num_kernel_bits{countr_zero(KernelSize)};
+
+  // TODO: Needs more theoretical analysis.
+  if constexpr (hash_layout == hash_layout_t::traditional) {
+    if constexpr (num_kernel_bits >= num_state_bits) {
+      h <<= num_kernel_bits - num_state_bits;
+      
+    } else {
+      h >>= num_state_bits - num_kernel_bits;
+    }
+  } else if constexpr (hash_layout == hash_layout_t::monkey_wrench) {
+    // TODO: Is this really necessary?
+    h <<= num_kernel_bits;
+  }
+  return static_cast<raw_pos_t>(h);
+}
+
+constexpr state_t hash_to_state(hash_t h) noexcept {
+  if constexpr (hash_layout == hash_layout_t::traditional) {
+    h &= state_mask;
+  } else if constexpr (hash_layout == hash_layout_t::monkey_wrench) {
+    h >>= num_bits_v<hash_t> - num_state_bits;
+  }
+  return static_cast<state_t>(h);
+}
+
+constexpr static int_t max_num_shards{16'384};
+static_assert(has_single_bit(max_num_shards));
+constexpr static int_t num_shard_bits{countr_zero(max_num_shards)};
+static_assert(num_shard_bits >= 4 && num_shard_bits <= 16);
+
+using shard_idx_t = int_t;
+
+constexpr shard_idx_t hash_to_shard_idx(hash_t h) noexcept {
+  if constexpr (hash_layout == hash_layout_t::traditional) {
+    h >>= num_bits_v<hash_t> - num_shard_bits;
+  } else if constexpr (hash_layout == hash_layout_t::monkey_wrench) {
+    h >>= num_bits_v<hash_t> - num_state_bits - num_shard_bits;
+  }
+  return static_cast<int_t>(h);
+}
 
 template <typename Key>
-constexpr hash_t key_to_hash(const Key& k) noexcept {
-  hash_t h{hasher<Key>(k)};
+constexpr hash_t key_to_hash(const Key& key) noexcept {
+  hash_t h{hasher<Key>(key)};
+  // TODO: We need a better hasher for strings.
+  //if constexpr (std::is_same_v<Key, std::string>) {
+  //  if (key.size() <= 8) {
+  //    h = 0;
+  //    memcpy(&h, key.data(), key.size());
+  //  } else {
+  //    h = hasher<Key>(key);
+  //  }
+  //}
 
   if constexpr (hash_mixer == hash_mixer_t::marsaglia) {
     // Mix bits by running them through a single-step Marsaglia-style multiply-with-carry generator.
@@ -58,41 +112,20 @@ constexpr hash_t key_to_hash(const Key& k) noexcept {
 
     // TODO: Do some quantiative experiments to see if we can find a better prime.
     constexpr uint64_t c{UINT64_C(0xde5f'b9d2'6304'58e9)};
-    const auto h128{static_cast<__uint128_t>(h) * c};
-    h = static_cast<hash_t>(h128 >> 64) + static_cast<hash_t>(h128);
+    const __uint128_t h128{static_cast<__uint128_t>(h) * c};
+    h = low_bits(h128) + high_bits(h128);
   }
 
   return h;
 }
 
-/**
- * Initializes a sequence.
- */
-template <typename Kernel>
-constexpr static raw_pos_t hash_to_pos(hash_t h, const size_t bucket_mask) noexcept {
-  using kernel_t = Kernel;
-
-  if constexpr (hash_layout == hash_layout_t::traditional) {
-    if constexpr (kernel_t::size <= 128) {
-      h = h / (128 / kernel_t::size);
-    } else {
-      h = h / 128 * kernel_t::size;
-    }
-  } else if constexpr (hash_layout == hash_layout_t::monkey_wrench) {
-    h = h * kernel_t::size;
-  }
-
-  return h & bucket_mask;
+template <typename Key>
+constexpr state_t key_to_state(const Key& key) noexcept {
+  return hash_to_state(key_to_hash(key));
 }
 
-constexpr state_t hash_to_state(hash_t h) noexcept {
-  if constexpr (hash_layout == hash_layout_t::traditional) {
-    h &= state_mask;
-  } else if constexpr (hash_layout == hash_layout_t::monkey_wrench) {
-    h >>= num_bits<hash_t> - num_state_bits;
-  }
-
-  return static_cast<state_t>(h);
-}
+constexpr static int_t num_pos_bits{num_bits_v<int_t> - num_state_bits - num_shard_bits};
+static_assert(num_pos_bits >= 32 && num_pos_bits <= 64);
+constexpr static int_t max_capacity{int_t{1} << num_pos_bits};
 
 }  // namespace nvhm

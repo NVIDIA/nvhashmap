@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(compile)
+
 add_executable(test_basics test_basics.cpp)
 target_link_libraries(test_basics GTest::gtest_main)
 
@@ -21,6 +23,12 @@ target_link_libraries(test_masks GTest::gtest_main)
 
 add_executable(test_kernels test_kernels.cpp)
 target_link_libraries(test_kernels GTest::gtest_main)
+
+add_executable(test_memory test_memory.cpp)
+target_link_libraries(test_memory GTest::gtest_main)
+
+add_executable(test_probe_seq test_probe_seq.cpp)
+target_link_libraries(test_probe_seq GTest::gtest_main)
 
 add_executable(test_maps test_maps.cpp)
 target_link_libraries(test_maps GTest::gtest_main)
