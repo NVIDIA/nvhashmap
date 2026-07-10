@@ -135,13 +135,17 @@ inline void write_prefetch<std::byte>(std::byte* __restrict p, int_t n) noexcept
 #endif
 
   for (int_t i{}; i < n; i += cache_line_size) {
-#if NVHM_WITH_SSE
+    #if NVHM_WITH_SSE
     if constexpr (use_sse_prefetch) {
+      #if defined(_MM_HINT_ET1)
       constexpr detail::mm_hint_t hint{prefetch_cache_level == 1 ? _MM_HINT_ET0 : _MM_HINT_ET1};
+      #else
+      constexpr detail::mm_hint_t hint{_MM_HINT_ET0};
+      #endif
       _mm_prefetch(&p[i], hint);
       continue;
     }
-#endif
+    #endif
 
     constexpr int hint{4 - std::min(prefetch_cache_level, 4)};
     static_assert(hint >= 0 && hint <= 3);
