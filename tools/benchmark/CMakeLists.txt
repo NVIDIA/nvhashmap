@@ -26,7 +26,7 @@ include_directories(
 add_executable(benchmark benchmark.cpp)
 target_link_libraries(benchmark absl::hash absl::raw_hash_set)
 target_compile_definitions(benchmark PRIVATE
-  NVHM_BENCH_COMPILE_KERNELS=20
+  NVHM_BENCH_COMPILE_KERNELS=0
   NVHM_BENCH_COMPILE_PROBE_SEQS=0
   NVHM_BENCH_COMPILE_MAP_TYPES=20
 )

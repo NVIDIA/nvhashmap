@@ -142,8 +142,35 @@ class worker {
   std::thread thread_;
 };
 
+template <typename It>
+NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It begin, It last) {
+  int_t num_workers{last - begin};
+
+  bool success{true};
+  std::chrono::milliseconds max{};
+  int_t count{};
+  for (; begin != last; ++begin) {
+    begin->join();
+
+    max = std::max(max, begin->time());
+    count += begin->count();
+
+    if (!begin->status()) {
+      std::cerr << "Worker #" << begin->index() << " failed!";
+      success = false;
+    }
+  }
+  
+  if (!success) {
+    return {std::chrono::milliseconds::zero(), -1};
+  }
+  return {max / num_workers, count};
+}
+
+static int_t blob_size{256};
+
 template <typename Map, typename Key, typename PrefetchHint>
-NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob, int_t blob_size) {
+NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob) {
   using map_t = Map;
   using write_pos_t = typename map_t::write_pos;
 
@@ -165,8 +192,30 @@ NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key
   }
 }
 
+template <typename Value, bool HasBlobs, bool SerializeCopy, typename Map, typename Key>
+NVHM_ALWAYS_INLINE void insert_entry_std(
+  Map& __restrict map, int_t /*i*/, const Key& __restrict k, std::byte* __restrict slot,
+  const char* __restrict blob, int_t blob_size) {
+  auto [it, success]{map.emplace(k, slot)};
+  NVHM_ASSERT_(success);
+  if constexpr (SerializeCopy) {
+    slot = it->second;
+  }
+
+  if constexpr (HasBlobs) {
+    std::memcpy(slot, blob, to_uint(blob_size));
+  }
+
+  if constexpr (std::is_same_v<Value, void>) {
+  } else if constexpr (std::is_same_v<Value, time_t>) {
+    *reinterpret_cast<time_t*>(&slot[blob_size]) = -k;
+  } else {
+    static_assert(dependent_false_v<Value>, "Unsupported `Value` type!");
+  }
+}
+
 template <typename Queue, typename Map, typename Key, typename PrefetchHint = typename Map::prefetch_hint>
-NVHM_NO_INLINE std::pair<bool, int_t> do_insert(worker& __restrict w, int_t batch_size, Map& __restrict map, const std::vector<Key>& __restrict keys, const std::vector<char>& __restrict blobs, int_t blob_size, int_t queue_len) {
+NVHM_NO_INLINE std::pair<bool, int_t> do_insert(worker& __restrict w, int_t batch_size, Map& __restrict map, const std::vector<Key>& __restrict keys, const std::vector<char>& __restrict blobs, int_t queue_len) {
   const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
   const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
 
@@ -178,7 +227,7 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_insert(worker& __restrict w, int_t batc
     }
 
     for (; i < i1; ++i) {
-      insert_entry(map, i, keys[to_uint(i)], std::monostate{}, &blobs[to_uint(i * blob_size)], blob_size);
+      insert_entry(map, i, keys[to_uint(i)], std::monostate{}, &blobs[to_uint(i * blob_size)]);
     }
   } else {
     if (queue_len > Queue::capacity) {
@@ -193,33 +242,48 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_insert(worker& __restrict w, int_t batc
       if (queue_len != Queue::capacity) {
         throw std::runtime_error("queue_len != queue_t::capacity");
       }
-      for (int_t j{}; j < queue_len; ++j) {
-        q.prefill_write(j, map, keys[to_uint(i0 + j)]);
-      }
-    } else if constexpr (Queue::type == queue_t::ring) {
-      for (int_t j{}; j < queue_len; ++j) {
-        q.prefill_write(map, keys[to_uint(i0 + j)]);
-      }
-    } else {
-      static_assert(dependent_false_v<Queue>, "Invalid queue type!");
     }
+
+    for (int_t j{}; j < queue_len; ++j) {
+      if constexpr (Queue::type == queue_t::shift) {
+        q.prefill_write(j, map, keys[to_uint(i0 + j)]);
+      } else if constexpr (Queue::type == queue_t::ring) {
+        q.prefill_write(map, keys[to_uint(i0 + j)]);
+      } else {
+        static_assert(dependent_false_v<Queue>, "Invalid queue type!");
+      }
+    } 
 
     for (; i < i1 - queue_len; ++i) {
       const auto [k0, h0]{q.push_write(map,  keys[to_uint(i + queue_len)])};
-      insert_entry(map, i, k0, std::move(h0), &blobs[to_uint(i * blob_size)], blob_size);
+      insert_entry(map, i, k0, std::move(h0), &blobs[to_uint(i * blob_size)]);
     }
 
     for (int_t j{}; j < queue_len; ++i, ++j) {
       const auto [k0, h0]{q.pop()};
-      insert_entry(map, i, k0, std::move(h0), &blobs[to_uint(i * blob_size)], blob_size);
+      insert_entry(map, i, k0, std::move(h0), &blobs[to_uint(i * blob_size)]);
     }
   }
 
   return {true, i - i0};
 }
 
+template <typename Value, bool HasBlobs, bool SerializeCopy, typename Map, typename Key>
+NVHM_NO_INLINE std::pair<bool, int_t> do_insert_std(worker& __restrict w, int_t batch_size, Map& __restrict map, const std::vector<Key>& __restrict keys,  const std::vector<std::byte*>& __restrict slots, const std::vector<char>& __restrict blobs) {
+  const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
+  const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
+
+  int_t i{i0};
+  for (; i < i1; ++i) {
+    insert_entry_std<Value, HasBlobs, SerializeCopy>(map, i, keys[to_uint(i)], slots[to_uint(i)], &blobs[to_uint(i * blob_size)], blob_size);
+  }
+
+  return {true, i - i0};
+}
+static bool check_blobs{false};
+
 template <typename Map, typename Key, typename PrefetchHint>
-NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restrict map, int_t i, const Key& __restrict k, PrefetchHint&& h, int_t blob_size, bool should_exist, bool check_blobs) {
+NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restrict map, int_t i, const Key& __restrict k, PrefetchHint&& h, bool should_exist) {
   using map_t = Map;
   using read_pos_t = typename map_t::read_pos;
   
@@ -264,649 +328,8 @@ NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restr
   return true;
 }
 
-template <typename Queue, typename Map, typename Key, typename PrefetchHint = typename Map::prefetch_hint>
-NVHM_NO_INLINE std::pair<bool, int_t> do_find(worker& __restrict w, int_t batch_size, const Map& __restrict map, const std::vector<Key>& __restrict keys, int_t blob_size, std::vector<bool>& __restrict should_exist, bool check_blobs, int_t queue_len) {
-  const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
-  const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
-
-  bool b{true};
-  int_t n{};
-
-  if constexpr (std::is_same_v<Queue, void>) {
-    if (queue_len != 0) {
-      throw std::runtime_error("queue_len != 0");
-    }
-    for (int_t i{i0}; i < i1; ++i) {
-      b = should_exist[to_uint(i)];
-      n += b;
-      b = find_and_verify(w, map, i, keys[to_uint(i)], std::monostate{}, blob_size, b, check_blobs);
-      if (!b) break;
-    }
-  } else {
-    if (queue_len > Queue::capacity) {
-      throw std::runtime_error("queue_len > queue_t::capacity");
-    }
-    if (static_cast<int_t>(keys.size()) < queue_len) {
-      throw std::runtime_error("keys.size() < queue_len");
-    }
-    Queue q;
-
-    if constexpr (Queue::type == queue_t::shift) {
-      if (queue_len != Queue::capacity) {
-        throw std::runtime_error("queue_len != queue_t::capacity");
-      }
-      for (int_t j{}; j < Queue::capacity; ++j) {
-        q.prefill_read(j, map, keys[to_uint(i0 + j)]);
-      }
-    } else if constexpr (Queue::type == queue_t::ring) {
-      for (int_t j{}; j < queue_len; ++j) {
-        q.prefill_read(map, keys[to_uint(i0 + j)]);
-      }
-    } else {
-      static_assert(dependent_false_v<Queue>, "Invalid queue type!");
-    }
-
-    int_t i{i0};
-    for (; i < i1 - queue_len; ++i) {
-      const auto [k0, h0]{q.push_read(map, keys[to_uint(i + queue_len)])};
-      b = should_exist[to_uint(i)];
-      n += b;
-      b = find_and_verify(w, map, i, k0, std::move(h0), blob_size, b, check_blobs);
-      if (!b) return {b, n};
-    }
-    
-    for (int_t j{}; j < queue_len; ++i, ++j) {
-      const auto [k0, h0]{q.pop()};
-      b = should_exist[to_uint(i)];
-      n += b;
-      b = find_and_verify(w, map, i, k0, std::move(h0), blob_size, b, check_blobs);
-      if (!b) break;
-    }
-  }
-
-  return {b, n};
-}
-
-template <typename It>
-NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It begin, It last) {
-  int_t num_workers{last - begin};
-
-  bool success{true};
-  std::chrono::milliseconds max{};
-  int_t count{};
-  for (; begin != last; ++begin) {
-    begin->join();
-
-    max = std::max(max, begin->time());
-    count += begin->count();
-
-    if (!begin->status()) {
-      std::cerr << "Worker #" << begin->index() << " failed!";
-      success = false;
-    }
-  }
-  
-  if (!success) {
-    return {std::chrono::milliseconds::zero(), -1};
-  }
-  return {max / num_workers, count};
-}
-
-template <typename Map>
-NVHM_NO_INLINE void bench_nvhm_map(
-  const int_t num_keys, const bool shuffle_keys, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng
-) {
-  using map_t = Map;
-  using conf_t = typename map_t::conf_type;
-  using key_t = typename map_t::key_type;
-  using hint_t = typename map_t::prefetch_hint;
-  
-  if (num_workers < 1 || num_workers > 1024) {
-    throw std::runtime_error("`num_workers` is out of bounds!");
-  }
-  if (find_keep_perc < 0 || find_keep_perc > 100) {
-    throw std::runtime_error("`prune_perc` is out of bounds!");
-  }
-  if (worker::scratch_buf_size < blob_size) {
-    throw std::runtime_error("`scratch_buf_size` is too small!");
-  }
-
-  const std::string map_type{type_to_string<map_t>()};
-
-  // Initialize key and data buffers.
-  std::vector<worker> workers;
-  workers.reserve(to_uint(num_workers));
-  for (int_t i{}; i < num_workers; ++i) {
-    workers.emplace_back(i);
-  }
-  
-  std::vector<key_t> keys(to_uint(num_keys));
-  std::iota(keys.begin(), keys.end(), 1337);
-
-  if (shuffle_keys) {
-    std::shuffle(keys.begin(), keys.end(), rng);
-  }
-
-  std::vector<char> blobs;
-  conf_t conf{};
-  if constexpr (map_t::has_blobs) {
-    blobs.resize(to_uint(num_keys * blob_size));
-    for (int_t i{}; i < num_keys; ++i) {
-      for (int_t j{}; j < blob_size; ++j) {
-        blobs[to_uint(i * blob_size + j)] += static_cast<char>(i + j + keys[to_uint(i)]);
-      }
-    }
-
-    conf.set_blob(blob_size);
-  }
-  map_t map(conf);
-
-  // Insert
-  for (int_t queue_len{}; queue_len < 1 + max_insert_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Insert " << 100 << "% (" << insert_queue_type << ' ' << std::setw(2) << queue_len << "): ";
-    std::cout.flush();
-
-    int_t total_count{};
-    for (int_t trial{}; trial < num_trials; ++trial) {
-      const int_t batch_size{ceil_div<int_t>(num_keys, 1)};
-
-      std::function<std::pair<bool, int_t>(worker&)> fn;
-      if (queue_len == 0) {
-        fn = [&](worker& w) { return do_insert<void>(w, batch_size, map, keys, blobs, blob_size, 0); };
-      } else {
-        switch (insert_queue_type) {
-          case queue_t::shift:
-            switch (queue_len) {
-              case  1: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  1>>(w, batch_size, map, keys, blobs, blob_size,  1); }; break;
-              case  2: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  2>>(w, batch_size, map, keys, blobs, blob_size,  2); }; break;
-              case  3: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  3>>(w, batch_size, map, keys, blobs, blob_size,  3); }; break;
-              case  4: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  4>>(w, batch_size, map, keys, blobs, blob_size,  4); }; break;
-              case  5: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  5>>(w, batch_size, map, keys, blobs, blob_size,  5); }; break;
-              case  6: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  6>>(w, batch_size, map, keys, blobs, blob_size,  6); }; break;
-              case  7: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  7>>(w, batch_size, map, keys, blobs, blob_size,  7); }; break;
-              case  8: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  8>>(w, batch_size, map, keys, blobs, blob_size,  8); }; break;
-              case  9: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  9>>(w, batch_size, map, keys, blobs, blob_size,  9); }; break;
-              case 10: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 10>>(w, batch_size, map, keys, blobs, blob_size, 10); }; break;
-              case 11: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 11>>(w, batch_size, map, keys, blobs, blob_size, 11); }; break;
-              case 12: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 12>>(w, batch_size, map, keys, blobs, blob_size, 12); }; break;
-              case 13: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 13>>(w, batch_size, map, keys, blobs, blob_size, 13); }; break;
-              case 14: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 14>>(w, batch_size, map, keys, blobs, blob_size, 14); }; break;
-              case 15: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 15>>(w, batch_size, map, keys, blobs, blob_size, 15); }; break;
-              case 16: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blobs, blob_size, 16); }; break;
-              default: throw std::runtime_error("`queue_len` is out of bounds!");
-            }
-            break;
-          case queue_t::ring:
-            if (queue_len <= 4) {
-              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 4>>(w, batch_size, map, keys, blobs, blob_size, queue_len); };
-            } else if (queue_len <= 8) {
-              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 8>>(w, batch_size, map, keys, blobs, blob_size, queue_len); };
-            } else if (queue_len <= 16) {
-              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blobs, blob_size, queue_len); };
-            } else if (queue_len <= 32) {
-              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 32>>(w, batch_size, map, keys, blobs, blob_size, queue_len); };
-            } else if (queue_len <= 64) {
-              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 64>>(w, batch_size, map, keys, blobs, blob_size, queue_len); };
-            } else {
-              throw std::runtime_error("`queue_len` is out of bounds!");
-            }
-            break;
-          default:
-            throw std::runtime_error("Unsupported `queue_type`!");
-        }
-      }
-      if (fn) {
-        map.clear();
-        worker::set_num_workers(1);
-        workers[0].assign(fn);
-        auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
-        total_count += count;
-      }
-    }
-    std::cout << ", size: " << map.size() << " / " << map.capacity() << " [ " << total_count << " ]" << '\n';
-  }
-  if (!map.check_integrity()) {
-    throw std::runtime_error("Map integrity check failed!");
-  }
-
-  // Set half of the bits.
-  std::vector<size_t> valid_indexes(keys.size());
-  std::iota(valid_indexes.begin(), valid_indexes.end(), 0);
-  std::shuffle(valid_indexes.begin(), valid_indexes.end(), rng);
-
-  std::cout << "map size after pruning: " << map.size();
-  std::vector<bool> should_exist(keys.size());
-  size_t i{};
-  for (; i < valid_indexes.size(); ++i) {
-    if (i < valid_indexes.size() * to_uint(find_keep_perc) / 100) {
-      should_exist[valid_indexes[i]] = true;
-    } else {
-      should_exist[valid_indexes[i]] = false;
-      map.erase(keys[valid_indexes[i]]);
-    }
-  }
-  std::cout << " -> " << map.size() << '\n';
-  if (!map.check_integrity()) {
-    throw std::runtime_error("Map integrity check failed!");
-  }
-
-  // Find
-  for (int_t queue_len{}; queue_len < 1 + max_find_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Find " << find_keep_perc << "% hit (" << find_queue_type << ' ' << std::setw(2) << queue_len << "): ";
-    std::cout.flush();
-
-    int_t total_count{};
-    for (int_t trial{}; trial < num_trials; ++trial) {
-      const int_t batch_size{ceil_div(num_keys, num_workers)};
-
-      std::function<std::pair<bool, int_t>(worker&)> fn;
-      if (queue_len == 0) {
-        fn = [&](worker& w_ctx) { return do_find<void>(w_ctx, batch_size, map, keys, blob_size, should_exist, check_blobs, 0); };
-      } else {
-        switch (find_queue_type) {
-          case queue_t::shift:
-            switch (queue_len) {
-              case  1: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  1>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  1); }; break;
-              case  2: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  2>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  2); }; break;
-              case  3: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  3>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  3); }; break;
-              case  4: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  4>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  4); }; break;
-              case  5: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  5>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  5); }; break;
-              case  6: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  6>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  6); }; break;
-              case  7: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  7>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  7); }; break;
-              case  8: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  8>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  8); }; break;
-              case  9: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  9>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs,  9); }; break;
-              case 10: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 10>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 10); }; break;
-              case 11: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 11>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 11); }; break;
-              case 12: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 12>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 12); }; break;
-              case 13: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 13>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 13); }; break;
-              case 14: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 14>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 14); }; break;
-              case 15: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 15>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 15); }; break;
-              case 16: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, 16); }; break;
-              default: throw std::runtime_error("`queue_len` is out of bounds!");
-            }
-            break;
-          case queue_t::ring:
-            if (queue_len <= 4) {
-              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 4>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, queue_len); };
-            } else if (queue_len <= 8) {
-              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 8>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, queue_len); };
-            } else if (queue_len <= 16) {
-              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, queue_len); };
-            } else if (queue_len <= 32) {
-              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 32>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, queue_len); };
-            } else if (queue_len <= 64) {
-              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 64>>(w, batch_size, map, keys, blob_size, should_exist, check_blobs, queue_len); };
-            } else {
-              throw std::runtime_error("`queue_len` is out of bounds!");
-            }
-            break;
-          default:
-            throw std::runtime_error("Unsupported `queue_type`!");
-        }
-      }
-      if (fn) {
-        worker::set_num_workers(num_workers);
-        for (int_t w{}; w < num_workers; ++w) {
-          workers[to_uint(w)].assign(fn);
-        }
-        auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
-        total_count += count;
-      }
-    }
-    std::cout << "; count: " << total_count << '\n';
-  }
-}
-
-#define NVHM_BENCH_MAP_ARGS_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng
-
-template <typename Key, typename Value, flags_t Flags, typename Kernel>
-void run_bench_nvhm_map_5(
-  int_t num_keys, bool shuffle_keys, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& probe_seq_type
-) {
-  if (probe_seq_type == "default") {
-    return bench_nvhm_map<map<Key, Value, Flags, Kernel, default_seq_t>>(NVHM_BENCH_MAP_ARGS_());
-  }
-  if constexpr (nvhm_bench_compile_probe_seqs >= 10) {
-    if (probe_seq_type == "linear") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<0>>>(NVHM_BENCH_MAP_ARGS_());
-    }
-    if (probe_seq_type == "quadratic") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<0>>>(NVHM_BENCH_MAP_ARGS_());
-    }
-  }
-  if constexpr (nvhm_bench_compile_probe_seqs >= 20) {
-    if (probe_seq_type == "aligned_linear") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<cache_line_size>>>(NVHM_BENCH_MAP_ARGS_());
-    }
-    if (probe_seq_type == "aligned_quadratic") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<cache_line_size>>>(NVHM_BENCH_MAP_ARGS_());
-    }
-  }
-  throw std::runtime_error("Invalid probe sequence type: " + probe_seq_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_PROBE_SEQS`?");
-}
-
-#define NVHM_BENCH_MAP_ARGS_5_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng,\
-  probe_seq_type
-
-template <typename Key, typename Value, flags_t Flags>
-void run_bench_nvhm_map_4(
-  int_t num_keys, bool shuffle_keys, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& kernel_type, const std::string& probe_seq_type
-) {
-  if (kernel_type == "default") {
-    return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<>>(NVHM_BENCH_MAP_ARGS_5_());
-  }
-  if constexpr (nvhm_bench_compile_kernels >= 10) {
-    if (kernel_type == "default1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<1>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<2>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<4>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<8>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<16>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<32>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<64>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<128>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<256>>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "default512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<512>>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-  }
-
-  if constexpr (nvhm_bench_compile_kernels >= 20) {
-    #if NVHM_WITH_SSE >= 2
-    if (kernel_type == "sse") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_AVX >= 2
-    if (kernel_type == "avx") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_AVX512
-    if (kernel_type == "avx512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_NEON
-    if (kernel_type == "neon8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel8_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    if (kernel_type == "neon16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel16_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    if (kernel_type == "neon32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel32_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    if (kernel_type == "neon64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel64_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE
-    #if NVHM_WITH_SVE_SIZE >= 1
-    if (kernel_type == "sve1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel1_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 2
-    if (kernel_type == "sve2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel2_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 4
-    if (kernel_type == "sve4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel4_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 8
-    if (kernel_type == "sve8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel8_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 16
-    if (kernel_type == "sve16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel16_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 32
-    if (kernel_type == "sve32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel32_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 64
-    if (kernel_type == "sve64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel64_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 128
-    if (kernel_type == "sve128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel128_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 256
-    if (kernel_type == "sve256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel256_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-    #endif
-    #endif
-  }
-
-  if constexpr (nvhm_bench_compile_kernels >= 30) {
-    if (kernel_type == "uint1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel1_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "uint2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel2_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "uint4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel4_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "uint8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel8_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "uint16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel16_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-
-    if (kernel_type == "fast_uint1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel1_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "fast_uint2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel2_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "fast_uint4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel4_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "fast_uint8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel8_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "fast_uint16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel16_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-  }
-
-  if constexpr (nvhm_bench_compile_kernels >= 40) {
-    if (kernel_type == "array1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel1_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel2_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel4_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel8_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel16_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel32_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel64_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel128_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel256_t>(NVHM_BENCH_MAP_ARGS_5_());
-    } else if (kernel_type == "array512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel512_t>(NVHM_BENCH_MAP_ARGS_5_());
-    }
-  }
-
-  throw std::runtime_error("Invalid kernel type: " + kernel_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_KERNELS`?");
-}
-
-#define NVHM_BENCH_MAP_ARGS_3_AND_4_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng,\
-  kernel_type, probe_seq_type
-
-template <typename Key, typename Value, flags_t Flags>
-void run_bench_nvhm_map_3(
-  int_t num_keys, bool shuffle_keys, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (blob_size > 0) {
-    run_bench_nvhm_map_4<Key, Value, Flags | flags_t::blobs>(NVHM_BENCH_MAP_ARGS_3_AND_4_());
-  } else {
-    run_bench_nvhm_map_4<Key, Value, Flags>(NVHM_BENCH_MAP_ARGS_3_AND_4_());
-  }
-}
-
-template <typename Key, typename Value>
-void run_bench_nvhm_map_2(
-  int_t num_keys, bool shuffle_keys, bool aggressive_prefetch, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (aggressive_prefetch) {
-    run_bench_nvhm_map_3<Key, Value, flags_t::aggressive_prefetch>(NVHM_BENCH_MAP_ARGS_3_AND_4_());
-  } else {
-    run_bench_nvhm_map_3<Key, Value, flags_t::none>(NVHM_BENCH_MAP_ARGS_3_AND_4_());
-  }
-}
-
-#define NVHM_BENCH_MAP_ARGS_2_()\
-  num_keys, shuffle_keys, aggressive_prefetch, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng,\
-  kernel_type, probe_seq_type
-
-template <typename Key>
-void run_bench_nvhm_map_1(
-  int_t num_keys, bool shuffle_keys, bool aggressive_prefetch, const std::string& value_type, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (value_type == "time") {
-    run_bench_nvhm_map_2<Key, time_t>(NVHM_BENCH_MAP_ARGS_2_());
-  } else if (value_type == "void") {
-    run_bench_nvhm_map_2<Key, void>(NVHM_BENCH_MAP_ARGS_2_());
-  } else {
-    throw std::runtime_error("Invalid value type: " + value_type);
-  }
-}
-
-#define NVHM_BENCH_MAP_ARGS_1_()\
-  num_keys, shuffle_keys, aggressive_prefetch, value_type, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng,\
-  kernel_type, probe_seq_type
-
-void run_bench_nvhm_map_0(
-  const std::string& key_type, int_t num_keys, bool shuffle_keys, bool aggressive_prefetch, const std::string& value_type, int_t blob_size,
-  int_t num_workers, int_t num_trials,
-  queue_t insert_queue_type, int_t max_insert_queue_len,
-  int_t find_keep_perc, queue_t find_queue_type, int_t max_find_queue_len, bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (key_type == "int32") {
-    run_bench_nvhm_map_1<int32_t>(NVHM_BENCH_MAP_ARGS_1_());
-  } else if (key_type == "int64") {
-    run_bench_nvhm_map_1<int64_t>(NVHM_BENCH_MAP_ARGS_1_());
-  } else {
-    throw std::runtime_error("Invalid key type: " + key_type);
-  }
-}
-
-template <typename Value, bool HasBlobs, bool SerializeCopy, typename Map, typename Key>
-NVHM_ALWAYS_INLINE void insert_entry_std(
-  Map& __restrict map, int_t /*i*/, const Key& __restrict k, std::byte* __restrict slot,
-  const char* __restrict blob, int_t blob_size) {
-  auto [it, success]{map.emplace(k, slot)};
-  NVHM_ASSERT_(success);
-  if constexpr (SerializeCopy) {
-    slot = it->second;
-  }
-
-  if constexpr (HasBlobs) {
-    std::memcpy(slot, blob, to_uint(blob_size));
-  }
-
-  if constexpr (std::is_same_v<Value, void>) {
-  } else if constexpr (std::is_same_v<Value, time_t>) {
-    *reinterpret_cast<time_t*>(&slot[blob_size]) = -k;
-  } else {
-    static_assert(dependent_false_v<Value>, "Unsupported `Value` type!");
-  }
-}
-
-template <typename Value, bool HasBlobs, bool SerializeCopy, typename Map, typename Key>
-NVHM_NO_INLINE std::pair<bool, int_t> do_insert_std(
-  worker& __restrict w, int_t batch_size, Map& __restrict map, const std::vector<Key>& __restrict keys, 
-  const std::vector<std::byte*>& __restrict slots, const std::vector<char>& __restrict blobs, int_t blob_size) {
-  const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
-  const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
-
-  int_t i{i0};
-  for (; i < i1; ++i) {
-    insert_entry_std<Value, HasBlobs, SerializeCopy>(map, i, keys[to_uint(i)], slots[to_uint(i)], &blobs[to_uint(i * blob_size)], blob_size);
-  }
-
-  return {true, i - i0};
-}
-
 template <typename Value, bool HasBlobs, typename Map, typename It, typename Key>
-NVHM_ALWAYS_INLINE bool find_and_verify_std(
-  worker& __restrict w, const Map& __restrict map, const It& __restrict map_end,
-  int_t i, const Key& __restrict k, int_t blob_size, bool should_exist, bool check_blobs) {
+NVHM_ALWAYS_INLINE bool find_and_verify_std(worker& __restrict w, const Map& __restrict map, const It& __restrict map_end, int_t i, const Key& __restrict k, bool should_exist) {
   auto it{map.find(k)};
 
   if (should_exist) {
@@ -946,10 +369,77 @@ NVHM_ALWAYS_INLINE bool find_and_verify_std(
   return true;
 }
 
+template <typename Queue, typename Map, typename Key, typename PrefetchHint = typename Map::prefetch_hint>
+NVHM_NO_INLINE std::pair<bool, int_t> do_find(worker& __restrict w, int_t batch_size, const Map& __restrict map, const std::vector<int_t>& __restrict indexes, const std::vector<Key>& __restrict keys, std::vector<bool>& __restrict should_exist, int_t queue_len) {
+  const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
+  const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
+
+  bool b{true};
+  int_t n{};
+
+  if constexpr (std::is_same_v<Queue, void>) {
+    if (queue_len != 0) {
+      throw std::runtime_error("queue_len != 0");
+    }
+    for (int_t i{i0}; i < i1; ++i) {
+      int_t idx{indexes[to_uint(i)]};
+      b = should_exist[to_uint(idx)];
+      n += b;
+      b = find_and_verify(w, map, idx, keys[to_uint(idx)], std::monostate{}, b);
+      if (!b) break;
+    }
+  } else {
+    if (queue_len > Queue::capacity) {
+      throw std::runtime_error("queue_len > queue_t::capacity");
+    }
+    if (static_cast<int_t>(keys.size()) < queue_len) {
+      throw std::runtime_error("keys.size() < queue_len");
+    }
+    Queue q;
+
+    if constexpr (Queue::type == queue_t::shift) {
+      if (queue_len != Queue::capacity) {
+        throw std::runtime_error("queue_len != queue_t::capacity");
+      }
+    }
+
+    for (int_t j{}; j < queue_len; ++j) {
+      int_t idx{indexes[to_uint(i0 + j)]};
+      if constexpr (Queue::type == queue_t::shift) {
+        q.prefill_read(j, map, keys[to_uint(idx)]);
+      } else if constexpr (Queue::type == queue_t::ring) {
+        q.prefill_read(map, keys[to_uint(idx)]);
+      } else {
+        static_assert(dependent_false_v<Queue>, "Invalid queue type!");
+      }
+    }
+
+    int_t i{i0};
+    for (; i < i1 - queue_len; ++i) {
+      int_t idx{indexes[to_uint(i + queue_len)]};
+      const auto [k0, h0]{q.push_read(map, keys[to_uint(idx)])};
+      idx = indexes[to_uint(i)];
+      b = should_exist[to_uint(idx)];
+      n += b;
+      b = find_and_verify(w, map, idx, k0, std::move(h0), b);
+      if (!b) return {b, n};
+    }
+    
+    for (int_t j{}; j < queue_len; ++i, ++j) {
+      const auto [k0, h0]{q.pop()};
+      int_t idx{indexes[to_uint(i)]};
+      b = should_exist[to_uint(idx)];
+      n += b;
+      b = find_and_verify(w, map, idx, k0, std::move(h0), b);
+      if (!b) break;
+    }
+  }
+
+  return {b, n};
+}
+
 template <typename Value, bool HasBlobs, typename Map, typename It, typename Key>
-NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(
-  worker& __restrict w, int_t batch_size, const Map& __restrict map, const It& __restrict map_end,
-  const std::vector<Key>& __restrict keys, int_t blob_size, std::vector<bool>& __restrict should_exist, bool check_blobs) {
+NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(worker& __restrict w, int_t batch_size, const Map& __restrict map, const It& __restrict map_end, const std::vector<int_t>& __restrict indexes, const std::vector<Key>& __restrict keys, std::vector<bool>& __restrict should_exist) {
   const int_t i0{std::min((w.index() + 0) * batch_size, to_int(keys.size()))};
   const int_t i1{std::min((w.index() + 1) * batch_size, to_int(keys.size()))};
 
@@ -957,22 +447,285 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(
   int_t n{};
 
   for (int_t i{i0}; i < i1; ++i) {
-    b = should_exist[to_uint(i)];
+    int_t idx{indexes[to_uint(i)]};
+    b = should_exist[to_uint(idx)];
     n += b;
-    b = find_and_verify_std<Value, HasBlobs>(w, map, map_end, i, keys[to_uint(i)], blob_size, b, check_blobs);
+    b = find_and_verify_std<Value, HasBlobs>(w, map, map_end, idx, keys[to_uint(idx)], b);
     if (!b) break;
   }
 
   return {b, n};
 }
 
+enum class key_source_t {
+  polynomial,
+  random
+};
+
+constexpr const char* to_string(key_source_t kd) {
+  switch (kd) {
+    case key_source_t::polynomial: return "polynomial";
+    case key_source_t::random: return "random";
+  }
+  return "error";
+}
+
+inline std::ostream& operator<<(std::ostream& os, key_source_t kd) {
+  return os << to_string(kd);
+}
+
+static int_t num_keys{50'000'000};
+static key_source_t key_source{key_source_t::polynomial};
+static int_t key_c[]{13, 3, 7};
+static int_t num_workers{8};
+static int_t num_insert_trials{5};
+static queue_t insert_queue_type{queue_t::ring};
+static int_t min_insert_queue_len{0};
+static int_t max_insert_queue_len{0};
+static int_t num_find_trials{5};
+static int_t find_keep_perc{100};
+static queue_t find_queue_type{queue_t::ring};
+static int_t min_find_queue_len{0};
+static int_t max_find_queue_len{0};
+static std::size_t seed{rd()};
+
+template <typename Map>
+NVHM_NO_INLINE void bench_nvhm_map() {
+  using map_t = Map;
+  using conf_t = typename map_t::conf_type;
+  using key_t = typename map_t::key_type;
+  using hint_t = typename map_t::prefetch_hint;
+  
+  if (num_workers < 1 || num_workers > 1024) {
+    throw std::runtime_error("`num_workers` is out of bounds!");
+  }
+  if (find_keep_perc < 0 || find_keep_perc > 100) {
+    throw std::runtime_error("`prune_perc` is out of bounds!");
+  }
+  if (worker::scratch_buf_size < blob_size) {
+    throw std::runtime_error("`scratch_buf_size` is too small!");
+  }
+ 
+  std::string map_type{type_to_string<map_t>()};
+  map_type.erase(std::remove_if(map_type.begin(), map_type.end(), [](unsigned char c){ return std::isspace(c); }), map_type.end());
+  std::replace(map_type.begin(), map_type.end(), ',', '|');
+  std::mt19937_64 rng{seed};
+ 
+  // Initialize key and data buffers.
+  std::vector<worker> workers;
+  workers.reserve(to_uint(num_workers));
+  for (int_t i{}; i < num_workers; ++i) {
+    workers.emplace_back(i);
+  }
+  
+  std::vector<key_t> keys(to_uint(num_keys));
+  std::uniform_int_distribution<key_t> uniform_dist;
+  for (int_t i{}; i < num_keys; ++i) {
+    switch (key_source) {
+      case key_source_t::polynomial:
+        keys[to_uint(i)] = static_cast<key_t>(key_c[2] * i * i + key_c[1] * i + key_c[0]);
+        break;
+      case key_source_t::random:
+        keys[to_uint(i)] = uniform_dist(rng);
+        break;
+      default:
+        throw std::runtime_error("Unsupported `key_source`!");
+    }
+  }
+  if (key_source != key_source_t::random) {
+    std::shuffle(keys.begin(), keys.end(), rng);
+  }
+
+  std::vector<char> blobs;
+  conf_t conf{};
+  if constexpr (map_t::has_blobs) {
+    blobs.resize(to_uint(num_keys * blob_size));
+    for (int_t i{}; i < num_keys; ++i) {
+      for (int_t j{}; j < blob_size; ++j) {
+        blobs[to_uint(i * blob_size + j)] += static_cast<char>(i + j + keys[to_uint(i)]);
+      }
+    }
+ 
+    conf.set_blob(blob_size);
+  }
+  map_t map(conf);
+ 
+  // Insert
+  for (int_t queue_len{min_insert_queue_len}; queue_len < max_insert_queue_len; ++queue_len) {
+    if (num_insert_trials > 0) {
+      std::cout << map_type << ", " << std::setw(10) << "Worker " << 1 << ", Insert " << 100 << "% (" << insert_queue_type << ' ' << std::setw(2) << queue_len << "): ";
+      std::cout.flush();
+    }
+ 
+    int_t total_count{};
+    for (int_t trial{}; trial < std::max<int_t>(1, num_insert_trials); ++trial) {
+      const int_t batch_size{ceil_div<int_t>(num_keys, 1)};
+ 
+      std::function<std::pair<bool, int_t>(worker&)> fn;
+      if (queue_len == 0) {
+        fn = [&](worker& w) { return do_insert<void>(w, batch_size, map, keys, blobs, 0); };
+      } else {
+        switch (insert_queue_type) {
+          case queue_t::shift:
+            switch (queue_len) {
+              case  1: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  1>>(w, batch_size, map, keys, blobs,  1); }; break;
+              case  2: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  2>>(w, batch_size, map, keys, blobs,  2); }; break;
+              case  3: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  3>>(w, batch_size, map, keys, blobs,  3); }; break;
+              case  4: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  4>>(w, batch_size, map, keys, blobs,  4); }; break;
+              case  5: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  5>>(w, batch_size, map, keys, blobs,  5); }; break;
+              case  6: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  6>>(w, batch_size, map, keys, blobs,  6); }; break;
+              case  7: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  7>>(w, batch_size, map, keys, blobs,  7); }; break;
+              case  8: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  8>>(w, batch_size, map, keys, blobs,  8); }; break;
+              case  9: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t,  9>>(w, batch_size, map, keys, blobs,  9); }; break;
+              case 10: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 10>>(w, batch_size, map, keys, blobs, 10); }; break;
+              case 11: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 11>>(w, batch_size, map, keys, blobs, 11); }; break;
+              case 12: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 12>>(w, batch_size, map, keys, blobs, 12); }; break;
+              case 13: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 13>>(w, batch_size, map, keys, blobs, 13); }; break;
+              case 14: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 14>>(w, batch_size, map, keys, blobs, 14); }; break;
+              case 15: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 15>>(w, batch_size, map, keys, blobs, 15); }; break;
+              case 16: fn = [&](worker& w) { return do_insert<shift_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blobs, 16); }; break;
+              default: throw std::runtime_error("`queue_len` is out of bounds!");
+            }
+            break;
+          case queue_t::ring:
+            if (queue_len <= 4) {
+              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 4>>(w, batch_size, map, keys, blobs, queue_len); };
+            } else if (queue_len <= 8) {
+              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 8>>(w, batch_size, map, keys, blobs, queue_len); };
+            } else if (queue_len <= 16) {
+              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, keys, blobs, queue_len); };
+            } else if (queue_len <= 32) {
+              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 32>>(w, batch_size, map, keys, blobs, queue_len); };
+            } else if (queue_len <= 64) {
+              fn = [&](worker& w) { return do_insert<ring_prefetch_queue<key_t, hint_t, 64>>(w, batch_size, map, keys, blobs, queue_len); };
+            } else {
+              throw std::runtime_error("`queue_len` is out of bounds!");
+            }
+            break;
+          default:
+            throw std::runtime_error("Unsupported `queue_type`!");
+        }
+      }
+      if (fn) {
+        map.clear();
+        worker::set_num_workers(1);
+        workers[0].assign(fn);
+        auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
+        if (num_insert_trials > 0) {
+          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
+          std::cout.flush();
+        }
+        total_count += count;
+      }
+    }
+    if (num_insert_trials > 0) {
+      std::cout << ", size: " << map.size() << " / " << map.capacity() << " [ " << total_count << " ]" << '\n';
+    }
+  }
+  if (!map.check_integrity()) {
+    throw std::runtime_error("Map integrity check failed!");
+  }
+  if (num_find_trials <= 0) return;
+ 
+  // Set half of the bits.
+  std::vector<int_t> indexes(keys.size());
+  std::iota(indexes.begin(), indexes.end(), 0);
+  std::shuffle(indexes.begin(), indexes.end(), rng);
+ 
+  std::cerr << "\nmap size after pruning: " << map.size();
+  std::vector<bool> should_exist(keys.size());
+  for (int_t i{}; i < to_int(indexes.size()); ++i) {
+    int_t idx{indexes[to_uint(i)]};
+    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+      should_exist[to_uint(idx)] = true;
+    } else {
+      should_exist[to_uint(idx)] = false;
+      map.erase(keys[to_uint(idx)]);
+    }
+  }
+  std::cerr << " -> " << map.size() << '\n';
+  if (!map.check_integrity()) {
+    throw std::runtime_error("Map integrity check failed!");
+  }
+ 
+  // Shuffle once more to decorrelate insert and find order.
+  std::shuffle(indexes.begin(), indexes.end(), rng);
+
+  // Find
+  for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
+    if (num_find_trials > 0) {
+      std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit (" << find_queue_type << ' ' << std::setw(2) << queue_len << "): ";
+      std::cout.flush();
+    }
+
+    int_t total_count{};
+    for (int_t trial{}; trial < num_find_trials; ++trial) {
+      const int_t batch_size{ceil_div(num_keys, num_workers)};
+ 
+      std::function<std::pair<bool, int_t>(worker&)> fn;
+      if (queue_len == 0) {
+        fn = [&](worker& w) { return do_find<void>(w, batch_size, map, indexes, keys, should_exist, 0); };
+      } else {
+        switch (find_queue_type) {
+          case queue_t::shift:
+            switch (queue_len) {
+              case  1: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  1>>(w, batch_size, map, indexes, keys, should_exist,  1); }; break;
+              case  2: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  2>>(w, batch_size, map, indexes, keys, should_exist,  2); }; break;
+              case  3: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  3>>(w, batch_size, map, indexes, keys, should_exist,  3); }; break;
+              case  4: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  4>>(w, batch_size, map, indexes, keys, should_exist,  4); }; break;
+              case  5: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  5>>(w, batch_size, map, indexes, keys, should_exist,  5); }; break;
+              case  6: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  6>>(w, batch_size, map, indexes, keys, should_exist,  6); }; break;
+              case  7: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  7>>(w, batch_size, map, indexes, keys, should_exist,  7); }; break;
+              case  8: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  8>>(w, batch_size, map, indexes, keys, should_exist,  8); }; break;
+              case  9: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t,  9>>(w, batch_size, map, indexes, keys, should_exist,  9); }; break;
+              case 10: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 10>>(w, batch_size, map, indexes, keys, should_exist, 10); }; break;
+              case 11: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 11>>(w, batch_size, map, indexes, keys, should_exist, 11); }; break;
+              case 12: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 12>>(w, batch_size, map, indexes, keys, should_exist, 12); }; break;
+              case 13: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 13>>(w, batch_size, map, indexes, keys, should_exist, 13); }; break;
+              case 14: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 14>>(w, batch_size, map, indexes, keys, should_exist, 14); }; break;
+              case 15: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 15>>(w, batch_size, map, indexes, keys, should_exist, 15); }; break;
+              case 16: fn = [&](worker& w) { return do_find<shift_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, indexes, keys, should_exist, 16); }; break;
+              default: throw std::runtime_error("`queue_len` is out of bounds!");
+            }
+            break;
+          case queue_t::ring:
+            if (queue_len <= 4) {
+              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 4>>(w, batch_size, map, indexes, keys, should_exist, queue_len); };
+            } else if (queue_len <= 8) {
+              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 8>>(w, batch_size, map, indexes, keys, should_exist, queue_len); };
+            } else if (queue_len <= 16) {
+              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 16>>(w, batch_size, map, indexes, keys, should_exist, queue_len); };
+            } else if (queue_len <= 32) {
+              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 32>>(w, batch_size, map, indexes, keys, should_exist, queue_len); };
+            } else if (queue_len <= 64) {
+              fn = [&](worker& w) { return do_find<ring_prefetch_queue<key_t, hint_t, 64>>(w, batch_size, map, indexes, keys, should_exist, queue_len); };
+            } else {
+              throw std::runtime_error("`queue_len` is out of bounds!");
+            }
+            break;
+          default:
+            throw std::runtime_error("Unsupported `queue_type`!");
+        }
+      }
+      if (fn) {
+        worker::set_num_workers(num_workers);
+        for (int_t w{}; w < num_workers; ++w) {
+          workers[to_uint(w)].assign(fn);
+        }
+        auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
+        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
+        std::cout.flush();
+        total_count += count;
+      }
+    }
+    if (num_find_trials > 0) {
+      std::cout << " [ " << total_count << " ]\n";
+    }
+  }
+}
+
 template <typename Map, typename Value, bool HasBlobs, bool SerializeCopy>
-void bench_std_map(
-  const int_t num_keys, const bool shuffle_keys, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t, const int_t max_insert_queue_len,
-  const int_t find_keep_perc, const queue_t, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng) {
+void bench_std_map() {
   using map_t = Map;
   using key_t = typename map_t::key_type;
   using ptr_t = typename map_t::value_type;
@@ -992,7 +745,10 @@ void bench_std_map(
     throw std::runtime_error("`scratch_buf_size` is too small!");
   }
 
-  const std::string map_type{type_to_string<map_t>()};
+  std::string map_type{type_to_string<map_t>()};
+  map_type.erase(std::remove_if(map_type.begin(), map_type.end(), [](unsigned char c){ return std::isspace(c); }), map_type.end());
+  std::replace(map_type.begin(), map_type.end(), ',', '|');
+  std::mt19937_64 rng{seed};
 
   // Initialize key and data buffers.
   std::vector<worker> workers;
@@ -1002,9 +758,20 @@ void bench_std_map(
   }
   
   std::vector<key_t> keys(to_uint(num_keys));
-  std::iota(keys.begin(), keys.end(), 1337);
-
-  if (shuffle_keys) {
+  std::uniform_int_distribution<key_t> uniform_dist;
+  for (int_t i{}; i < num_keys; ++i) {
+    switch (key_source) {
+      case key_source_t::polynomial:
+        keys[to_uint(i)] = static_cast<key_t>(key_c[2] * i * i + key_c[1] * i + key_c[0]);
+        break;
+      case key_source_t::random:
+        keys[to_uint(i)] = uniform_dist(rng);
+        break;
+      default:
+        throw std::runtime_error("Unsupported `key_source`!");
+    }
+  }
+  if (key_source != key_source_t::random) {
     std::shuffle(keys.begin(), keys.end(), rng);
   }
 
@@ -1038,17 +805,19 @@ void bench_std_map(
 
   map_t map;
 
-  for (int_t queue_len{}; queue_len < 1 + max_insert_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Insert " << 100 << "%: ";
-    std::cout.flush();
+  for (int_t queue_len{min_insert_queue_len}; queue_len < max_insert_queue_len; ++queue_len) {
+    if (num_insert_trials > 0) {
+      std::cout << map_type << ", " << std::setw(10) << "Worker " << 1 << ", Insert " << 100 << "%: ";
+      std::cout.flush();
+    }
 
     int_t total_count{};
-    for (int_t trial{}; trial < num_trials; ++trial) {
+    for (int_t trial{}; trial < std::max<int_t>(1, num_insert_trials); ++trial) {
       const int_t batch_size{ceil_div<int_t>(num_keys, 1)};
 
       std::function<std::pair<bool, int_t>(worker&)> fn;
       if (queue_len == 0) {
-        fn = [&](worker& w) { return do_insert_std<value_t, has_blobs, serialize_copy>(w, batch_size, map, keys, slots, blobs, blob_size); };
+        fn = [&](worker& w) { return do_insert_std<value_t, has_blobs, serialize_copy>(w, batch_size, map, keys, slots, blobs); };
       } else {
         throw std::runtime_error("Unsupported `queue_len`!");
       }
@@ -1057,44 +826,52 @@ void bench_std_map(
         worker::set_num_workers(1);
         workers[0].assign(fn);
         auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
+        if (num_insert_trials > 0) {
+          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
+          std::cout.flush();
+        }
         total_count += count;
       }
     }
-    std::cout << ", size: " << map.size() << "[ " << total_count << " ]" << '\n';
-  }
-  
-  // Set half of the bits.
-  std::vector<size_t> valid_indexes(keys.size());
-  std::iota(valid_indexes.begin(), valid_indexes.end(), 0);
-  std::shuffle(valid_indexes.begin(), valid_indexes.end(), rng);
-
-  std::cout << "map size after pruning: " << map.size();
-  std::vector<bool> should_exist(keys.size());
-  size_t i{};
-  for (; i < valid_indexes.size(); ++i) {
-    if (i < valid_indexes.size() * to_uint(find_keep_perc) / 100) {
-      should_exist[valid_indexes[i]] = true;
-    } else {
-      should_exist[valid_indexes[i]] = false;
-      map.erase(keys[valid_indexes[i]]);
+    if (num_insert_trials > 0) {
+      std::cout << ", size: " << map.size() << " [ " << total_count << " ]" << '\n';
     }
   }
-  std::cout << " -> " << map.size() << '\n';
+  if (num_find_trials <= 0) return;
+  
+  // Set half of the bits.
+  std::vector<int_t> indexes(keys.size());
+  std::iota(indexes.begin(), indexes.end(), 0);
+  std::shuffle(indexes.begin(), indexes.end(), rng);
+
+  std::cerr << "\nmap size after pruning: " << map.size();
+  std::vector<bool> should_exist(keys.size());
+  for (int_t i{}; i < to_int(indexes.size()); ++i) {
+    int_t idx{indexes[to_uint(i)]};
+    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+      should_exist[to_uint(idx)] = true;
+    } else {
+      should_exist[to_uint(idx)] = false;
+      map.erase(keys[to_uint(idx)]);
+    }
+  }
+  std::cerr << " -> " << map.size() << '\n';
+
+  // Shuffle once more to decorrelate insert and find order.
+  std::shuffle(indexes.begin(), indexes.end(), rng);
 
   // Find
-  for (int_t queue_len{}; queue_len < 1 + max_find_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Find " << find_keep_perc << "% hit: ";
+  for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
+    std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit: ";
     std::cout.flush();
 
     int_t total_count{};
-    for (int_t trial{}; trial < num_trials; ++trial) {
+    for (int_t trial{}; trial < num_find_trials; ++trial) {
       const int_t batch_size{ceil_div(num_keys, num_workers)};
 
       std::function<std::pair<bool, int_t>(worker&)> fn;
       if (queue_len == 0) {
-        fn = [&](worker& w) { return do_find_std<value_t, has_blobs>(w, batch_size, map, map.end(), keys, blob_size, should_exist, check_blobs); };
+        fn = [&](worker& w) { return do_find_std<value_t, has_blobs>(w, batch_size, map, map.end(), indexes, keys, should_exist); };
       } else {
         throw std::runtime_error("Unsupported `queue_len`!");
       }
@@ -1109,130 +886,297 @@ void bench_std_map(
         total_count += count;
       }
     }
-    std::cout << "; count: " << total_count << '\n';
+    std::cout << " [ " << total_count << " ]\n";
   }
 }
 
-#define NVHM_BENCH_STD_MAP_ARGS_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng
-  
+template <typename Key, typename Value, flags_t Flags, typename Kernel>
+void run_bench_nvhm_map_5(const std::string& probe_seq_type) {
+  if (probe_seq_type == "default") {
+    return bench_nvhm_map<map<Key, Value, Flags, Kernel, default_seq_t>>();
+  }
+  if constexpr (nvhm_bench_compile_probe_seqs >= 10) {
+    if (probe_seq_type == "linear") {
+      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<0>>>();
+    }
+    if (probe_seq_type == "quadratic") {
+      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<0>>>();
+    }
+  }
+  if constexpr (nvhm_bench_compile_probe_seqs >= 20) {
+    if (probe_seq_type == "aligned_linear") {
+      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<cache_line_size>>>();
+    }
+    if (probe_seq_type == "aligned_quadratic") {
+      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<cache_line_size>>>();
+    }
+  }
+  throw std::runtime_error("Invalid probe sequence type: " + probe_seq_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_PROBE_SEQS`?");
+}
+
+template <typename Key, typename Value, flags_t Flags>
+void run_bench_nvhm_map_4(const std::string& kernel_type, const std::string& probe_seq_type) {
+  if (kernel_type == "default") {
+    return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<>>(probe_seq_type);
+  }
+  if constexpr (nvhm_bench_compile_kernels >= 10) {
+    if (kernel_type == "default1") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<1>>(probe_seq_type);
+    } else if (kernel_type == "default2") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<2>>(probe_seq_type);
+    } else if (kernel_type == "default4") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<4>>(probe_seq_type);
+    } else if (kernel_type == "default8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<8>>(probe_seq_type);
+    } else if (kernel_type == "default16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<16>>(probe_seq_type);
+    } else if (kernel_type == "default32") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<32>>(probe_seq_type);
+    } else if (kernel_type == "default64") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<64>>(probe_seq_type);
+    } else if (kernel_type == "default128") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<128>>(probe_seq_type);
+    } else if (kernel_type == "default256") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<256>>(probe_seq_type);
+    } else if (kernel_type == "default512") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<512>>(probe_seq_type);
+    }
+  }
+
+  if constexpr (nvhm_bench_compile_kernels >= 20) {
+    #if NVHM_WITH_SSE >= 2
+    if (kernel_type == "sse") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_AVX >= 2
+    if (kernel_type == "avx") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_AVX512
+    if (kernel_type == "avx512") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_NEON
+    if (kernel_type == "neon8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel8_t>(probe_seq_type);
+    }
+    if (kernel_type == "neon16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel16_t>(probe_seq_type);
+    }
+    if (kernel_type == "neon32") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel32_t>(probe_seq_type);
+    }
+    if (kernel_type == "neon64") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel64_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE
+    #if NVHM_WITH_SVE_SIZE >= 1
+    if (kernel_type == "sve1") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel1_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 2
+    if (kernel_type == "sve2") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel2_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 4
+    if (kernel_type == "sve4") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel4_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 8
+    if (kernel_type == "sve8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel8_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 16
+    if (kernel_type == "sve16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel16_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 32
+    if (kernel_type == "sve32") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel32_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 64
+    if (kernel_type == "sve64") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel64_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 128
+    if (kernel_type == "sve128") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel128_t>(probe_seq_type);
+    }
+    #endif
+    #if NVHM_WITH_SVE_SIZE >= 256
+    if (kernel_type == "sve256") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel256_t>(probe_seq_type);
+    }
+    #endif
+    #endif
+  }
+
+  if constexpr (nvhm_bench_compile_kernels >= 30) {
+    if (kernel_type == "uint1") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel1_t>(probe_seq_type);
+    } else if (kernel_type == "uint2") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel2_t>(probe_seq_type);
+    } else if (kernel_type == "uint4") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel4_t>(probe_seq_type);
+    } else if (kernel_type == "uint8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel8_t>(probe_seq_type);
+    } else if (kernel_type == "uint16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel16_t>(probe_seq_type);
+    }
+
+    if (kernel_type == "fast_uint1") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel1_t>(probe_seq_type);
+    } else if (kernel_type == "fast_uint2") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel2_t>(probe_seq_type);
+    } else if (kernel_type == "fast_uint4") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel4_t>(probe_seq_type);
+    } else if (kernel_type == "fast_uint8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel8_t>(probe_seq_type);
+    } else if (kernel_type == "fast_uint16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel16_t>(probe_seq_type);
+    }
+  }
+
+  if constexpr (nvhm_bench_compile_kernels >= 40) {
+    if (kernel_type == "array1") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel1_t>(probe_seq_type);
+    } else if (kernel_type == "array2") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel2_t>(probe_seq_type);
+    } else if (kernel_type == "array4") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel4_t>(probe_seq_type);
+    } else if (kernel_type == "array8") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel8_t>(probe_seq_type);
+    } else if (kernel_type == "array16") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel16_t>(probe_seq_type);
+    } else if (kernel_type == "array32") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel32_t>(probe_seq_type);
+    } else if (kernel_type == "array64") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel64_t>(probe_seq_type);
+    } else if (kernel_type == "array128") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel128_t>(probe_seq_type);
+    } else if (kernel_type == "array256") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel256_t>(probe_seq_type);
+    } else if (kernel_type == "array512") {
+      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel512_t>(probe_seq_type);
+    }
+  }
+
+  throw std::runtime_error("Invalid kernel type: " + kernel_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_KERNELS`?");
+}
+
+template <typename Key, typename Value, flags_t Flags>
+void run_bench_nvhm_map_3(const std::string& kernel_type, const std::string& probe_seq_type) {
+  if (blob_size > 0) {
+    run_bench_nvhm_map_4<Key, Value, Flags | flags_t::blobs>(kernel_type, probe_seq_type);
+  } else {
+    run_bench_nvhm_map_4<Key, Value, Flags>(kernel_type, probe_seq_type);
+  }
+}
+
+template <typename Key, typename Value>
+void run_bench_nvhm_map_2(bool aggressive_prefetch, const std::string& kernel_type, const std::string& probe_seq_type) {
+  if (aggressive_prefetch) {
+    run_bench_nvhm_map_3<Key, Value, flags_t::aggressive_prefetch>(kernel_type, probe_seq_type);
+  } else {
+    run_bench_nvhm_map_3<Key, Value, flags_t::none>(kernel_type, probe_seq_type);
+  }
+}
+
+template <typename Key>
+void run_bench_nvhm_map_1(bool aggressive_prefetch, const std::string& value_type, const std::string& kernel_type, const std::string& probe_seq_type) {
+  if (value_type == "time") {
+    run_bench_nvhm_map_2<Key, time_t>(aggressive_prefetch, kernel_type, probe_seq_type);
+  } else if (value_type == "void") {
+    run_bench_nvhm_map_2<Key, void>(aggressive_prefetch, kernel_type, probe_seq_type);
+  } else {
+    throw std::runtime_error("Invalid value type: " + value_type);
+  }
+}
+
+void run_bench_nvhm_map_0(const std::string& key_type, bool aggressive_prefetch, const std::string& value_type, const std::string& kernel_type, const std::string& probe_seq_type) {
+  if (key_type == "int32") {
+    run_bench_nvhm_map_1<int32_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
+  } else if (key_type == "int64") {
+    run_bench_nvhm_map_1<int64_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
+  } else {
+    throw std::runtime_error("Invalid key type: " + key_type);
+  }
+}
+
 template <typename Key, typename Value, bool HasBlobs, bool SerializeCopy>
-void run_bench_std_map_4(
-  const int_t num_keys, const bool shuffle_keys, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& map_type) {
+void run_bench_std_map_4(const std::string& map_type) {
   if constexpr (nvhm_bench_compile_map_types >= 10) {
     if (map_type == "nvhm_std_map_shim") {
-      return bench_std_map<std_map_shim<map<Key, std::byte*>>, Value, HasBlobs, SerializeCopy>(NVHM_BENCH_STD_MAP_ARGS_());
+      return bench_std_map<std_map_shim<map<Key, std::byte*>>, Value, HasBlobs, SerializeCopy>();
     }
     if (map_type == "std_unordered_map") {
-      return bench_std_map<std::unordered_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>(NVHM_BENCH_STD_MAP_ARGS_());
+      return bench_std_map<std::unordered_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
     }
   }
 
   if constexpr (nvhm_bench_compile_map_types >= 20) {
     if (map_type == "absl_flat_hash_map") {
-      return bench_std_map<absl::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>(NVHM_BENCH_STD_MAP_ARGS_());
+      return bench_std_map<absl::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
     }
     #if __cplusplus >= 202002L
     if (map_type == "folly_f14_value_map") {
-      return bench_std_map<folly::F14ValueMap<Key, std::byte*>, Value, HasBlobs, SerializeCopy>(NVHM_BENCH_STD_MAP_ARGS_());
+      return bench_std_map<folly::F14ValueMap<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
     }
     #endif
     if (map_type == "phmap_flat_hash_map") {
-      return bench_std_map<phmap::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>(NVHM_BENCH_STD_MAP_ARGS_());
+      return bench_std_map<phmap::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
     }
   }
 
   throw std::runtime_error("Unsupported `map_type`: " + map_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_MAP_TYPES`?");
 }
 
-#define NVHM_BENCH_STD_MAP_4_ARGS_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng, map_type
-
 template <typename Map, typename Value, bool HasBlobs>
-void run_bench_std_map_3(
-  const int_t num_keys, const bool shuffle_keys, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len, bool serialize_copy,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& map_type) {
+void run_bench_std_map_3(bool serialize_copy, const std::string& map_type) {
   if (serialize_copy) {
-    run_bench_std_map_4<Map, Value, HasBlobs, true>(NVHM_BENCH_STD_MAP_4_ARGS_());
+    run_bench_std_map_4<Map, Value, HasBlobs, true>(map_type);
   } else {
-    run_bench_std_map_4<Map, Value, HasBlobs, false>(NVHM_BENCH_STD_MAP_4_ARGS_());
+    run_bench_std_map_4<Map, Value, HasBlobs, false>(map_type);
   }
 }
 
-#define NVHM_BENCH_STD_MAP_2_AND_3_ARGS_()\
-  num_keys, shuffle_keys, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len, serialize_copy,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng, map_type
-
 template <typename Map, typename Value>
-void run_bench_std_map_2(
-  const int_t num_keys, const bool shuffle_keys, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len, bool serialize_copy,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& map_type) {
+void run_bench_std_map_2(bool serialize_copy, const std::string& map_type) {
   if (blob_size > 0) {
-    run_bench_std_map_3<Map, Value, true>(NVHM_BENCH_STD_MAP_2_AND_3_ARGS_());
+    run_bench_std_map_3<Map, Value, true>(serialize_copy, map_type);
   } else {
-    run_bench_std_map_3<Map, Value, false>(NVHM_BENCH_STD_MAP_2_AND_3_ARGS_());
+    run_bench_std_map_3<Map, Value, false>(serialize_copy, map_type);
   }
 }
 
 template <typename Key>
-void run_bench_std_map_1(
-  const int_t num_keys, const bool shuffle_keys, const std::string& value_type, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len, bool serialize_copy,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& map_type) {
+void run_bench_std_map_1(const std::string& value_type, bool serialize_copy, const std::string& map_type) {
   if (value_type == "time") {
-    run_bench_std_map_2<Key, time_t>(NVHM_BENCH_STD_MAP_2_AND_3_ARGS_());
+    run_bench_std_map_2<Key, time_t>(serialize_copy, map_type);
   } else if (value_type == "void") {
-    run_bench_std_map_2<Key, void>(NVHM_BENCH_STD_MAP_2_AND_3_ARGS_());
+    run_bench_std_map_2<Key, void>(serialize_copy, map_type);
   } else {
     throw std::runtime_error("Invalid value type: " + value_type);
   }
 }
 
-#define NVHM_BENCH_STD_MAP_1_ARGS_()\
-  num_keys, shuffle_keys, value_type, blob_size,\
-  num_workers, num_trials,\
-  insert_queue_type, max_insert_queue_len, serialize_copy,\
-  find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,\
-  rng, map_type
-
 void run_bench_std_map_0(
-  const std::string& key_type, const int_t num_keys, const bool shuffle_keys, const std::string& value_type, const int_t blob_size, 
-  const int_t num_workers, const int_t num_trials,
-  const queue_t insert_queue_type, const int_t max_insert_queue_len, bool serialize_copy,
-  const int_t find_keep_perc, const queue_t find_queue_type, const int_t max_find_queue_len, const bool check_blobs,
-  std::mt19937_64& rng,
-  const std::string& map_type) {
+  const std::string& key_type, const std::string& value_type, bool serialize_copy, const std::string& map_type) {
   if (key_type == "int32" ) {
-    run_bench_std_map_1<int32_t>(NVHM_BENCH_STD_MAP_1_ARGS_());
+    run_bench_std_map_1<int32_t>(value_type, serialize_copy, map_type);
   } else if (key_type == "int64") {
-    run_bench_std_map_1<int64_t>(NVHM_BENCH_STD_MAP_1_ARGS_());
+    run_bench_std_map_1<int64_t>(value_type, serialize_copy, map_type);
   } else {
     throw std::runtime_error("Unsupported `key_type`!");
   }
@@ -1263,27 +1207,12 @@ CLI::Validator make_set_validator(std::string name, const std::set<T>& values) {
 
 int main(int argc, char* argv[]) {
   CLI::App app{"NVHashmap Benchmark"};
-  
-  std::string key_type{"int64"};
-  int_t num_keys{50'000'000};
-  bool shuffle_keys{true};
-  bool aggressive_prefetch{true};
-  std::string value_type{"time"};
-  int_t blob_size{256};
-  int_t num_workers{8};
-  int_t num_trials{4};
-  queue_t insert_queue_type{queue_t::ring};
-  int_t max_insert_queue_len{0};
-  int_t find_keep_perc{100};
-  queue_t find_queue_type{queue_t::ring};
-  int_t max_find_queue_len{0};
-  bool check_blobs{false};
-  std::size_t seed{rd()};
-  std::string map_type{"nvhm_map"};
-  std::string kernel_type{"default"};
-  std::string probe_seq_type{"default"};
-  bool serialize_copy{false};
 
+  const std::map<std::string, key_source_t> str_to_key_source{
+    {to_string(key_source_t::polynomial), key_source_t::polynomial},
+    {to_string(key_source_t::random), key_source_t::random}
+  };
+  
   const std::map<std::string, queue_t> str_to_queue{
     {to_string(queue_t::shift), queue_t::shift},
     {to_string(queue_t::ring), queue_t::ring}
@@ -1370,19 +1299,32 @@ int main(int argc, char* argv[]) {
     #endif
     "nvhm_map"
   };
-  
+  std::string key_type{"int64"};
+  bool aggressive_prefetch{true};
+  std::string value_type{"time"};
+  std::string map_type{"nvhm_map"};
+  std::string kernel_type{"default"};
+  std::string probe_seq_type{"default"};
+  bool serialize_copy{false};
+
   app.add_option("--key_type", key_type, "Key type (int32 | int64)")->default_val(key_type);
   app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--shuffle_keys", shuffle_keys, "Shuffle keys before insertion")->default_val(shuffle_keys);
+  app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
+  app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
+  app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
+  app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
   app.add_option("--aggressive_prefetch", aggressive_prefetch, "Aggressive prefetch")->default_val(aggressive_prefetch);
   app.add_option("--value_type", value_type, "Value type (time | void)")->default_val(value_type);
   app.add_option("--blob_size", blob_size, "Blob size")->default_val(blob_size)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--num_workers", num_workers, "Number of workers")->default_val(num_workers)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--num_trials", num_trials, "Number of trials")->default_val(num_trials)->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_insert_trials", num_insert_trials, "Number of trials for insert")->default_val(num_insert_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--insert_queue_type", insert_queue_type, "Insert queue type")->default_str(to_string(insert_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
+  app.add_option("--min_insert_queue_len", min_insert_queue_len, "Min insert queue length")->default_val(min_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--max_insert_queue_len", max_insert_queue_len, "Max insert queue length")->default_val(max_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--num_find_trials", num_find_trials, "Number of trials for find")->default_val(num_find_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--find_keep_perc", find_keep_perc, "Find keep percentage")->default_val(find_keep_perc)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--find_queue_type", find_queue_type, "Find queue type")->default_str(to_string(find_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
+  app.add_option("--min_find_queue_len", min_find_queue_len, "Min find queue length")->default_val(min_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->default_val(max_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--check_blobs", check_blobs, "Check blobs")->default_val(check_blobs);
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
@@ -1394,45 +1336,51 @@ int main(int argc, char* argv[]) {
   argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
 
-  std::cout << argv[0] << '\n';
-  std::cout << "  --key_type " << key_type << '\n';
-  std::cout << "  --num_keys " << num_keys << '\n';
-  std::cout << "  --shuffle_keys " << shuffle_keys << '\n';
-  std::cout << "  --aggressive_prefetch " << aggressive_prefetch << '\n';
-  std::cout << "  --value_type " << value_type << '\n';
-  std::cout << "  --blob_size " << blob_size << '\n';
-  std::cout << "  --num_workers " << num_workers << '\n';
-  std::cout << "  --num_trials " << num_trials << '\n';
-  std::cout << "  --insert_queue_type " << insert_queue_type << '\n';
-  std::cout << "  --max_insert_queue_len " << max_insert_queue_len << '\n';
-  std::cout << "  --find_keep_perc " << find_keep_perc << '\n';
-  std::cout << "  --find_queue_type " << find_queue_type << '\n';
-  std::cout << "  --max_find_queue_len " << max_find_queue_len << '\n';
-  std::cout << "  --check_blobs " << check_blobs << '\n';
-  std::cout << "  --seed = " << seed << '\n';
-  std::cout << "  --map_type " << map_type << '\n';
-  std::cout << "  --kernel_type " << kernel_type << '\n';
-  std::cout << "  --probe_seq_type " << probe_seq_type << '\n';
-  std::cout << "  --serialize_copy " << serialize_copy << '\n';
+  std::cerr << argv[0] << " \\\n";
+  std::cerr << "  --key_type " << key_type << " \\\n";
+  std::cerr << "  --num_keys " << num_keys << " \\\n";
+  std::cerr << "  --key_source " << key_source << " \\\n";
+  std::cerr << "  --key_c0 " << key_c[0] << " \\\n";
+  std::cerr << "  --key_c1 " << key_c[1] << " \\\n";
+  std::cerr << "  --key_c2 " << key_c[2] << " \\\n";
+  std::cerr << "  --aggressive_prefetch " << aggressive_prefetch << " \\\n";
+  std::cerr << "  --value_type " << value_type << " \\\n";
+  std::cerr << "  --blob_size " << blob_size << " \\\n";
+  std::cerr << "  --num_workers " << num_workers << " \\\n";
+  std::cerr << "  --num_insert_trials " << num_insert_trials << " \\\n";
+  std::cerr << "  --insert_queue_type " << insert_queue_type << " \\\n";
+  std::cerr << "  --min_insert_queue_len " << min_insert_queue_len << " \\\n";
+  std::cerr << "  --max_insert_queue_len " << max_insert_queue_len << " \\\n";
+  std::cerr << "  --num_find_trials " << num_find_trials << " \\\n";
+  std::cerr << "  --find_keep_perc " << find_keep_perc << " \\\n";
+  std::cerr << "  --find_queue_type " << find_queue_type << " \\\n";
+  std::cerr << "  --min_find_queue_len " << min_find_queue_len << " \\\n";
+  std::cerr << "  --max_find_queue_len " << max_find_queue_len << " \\\n";
+  std::cerr << "  --check_blobs " << check_blobs << " \\\n";
+  std::cerr << "  --seed " << seed << " \\\n";
+  std::cerr << "  --map_type " << map_type << " \\\n";
+  std::cerr << "  --kernel_type " << kernel_type << " \\\n";
+  std::cerr << "  --probe_seq_type " << probe_seq_type << " \\\n";
+  std::cerr << "  --serialize_copy " << serialize_copy << " \\\n";
 
-  std::mt19937_64 rng(seed);
+  if (min_insert_queue_len > max_insert_queue_len) {
+    throw std::runtime_error("`min_insert_queue_len` must be less than `max_insert_queue_len`!");
+  }
+  ++max_insert_queue_len;
+
+  if (min_find_queue_len > max_find_queue_len) {
+    throw std::runtime_error("`min_find_queue_len` must be less than `max_find_queue_len`!");
+  }
+  ++max_find_queue_len;
+
+  if (max_insert_queue_len - min_insert_queue_len < 1) {
+    throw std::runtime_error("`max_insert_queue_len - min_insert_queue_len` must be = 1!");
+  }
 
   if (map_type == "nvhm_map") {
-    run_bench_nvhm_map_0(
-      key_type, num_keys, shuffle_keys, aggressive_prefetch, value_type, blob_size,
-      num_workers, num_trials,
-      insert_queue_type, max_insert_queue_len,
-      find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,
-      rng, kernel_type, probe_seq_type
-    );
+    run_bench_nvhm_map_0(key_type, aggressive_prefetch, value_type, kernel_type, probe_seq_type);
   } else {
-    run_bench_std_map_0(
-      key_type, num_keys, shuffle_keys, value_type, blob_size,
-      num_workers, num_trials,
-      insert_queue_type, max_insert_queue_len, serialize_copy,
-      find_keep_perc, find_queue_type, max_find_queue_len, check_blobs,
-      rng, map_type
-    );
+    run_bench_std_map_0(key_type, value_type, serialize_copy, map_type);
   }
 
   return 0;
