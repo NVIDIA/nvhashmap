@@ -59,13 +59,15 @@ namespace nvhm {
 
 namespace detail {
 
+#if NVHM_WITH_SSE
 #if (defined(__GNUC__) && (__GNUC__ < 15)) || defined(__clang__)
 using mm_hint_t = int;
 #else
 using mm_hint_t = _mm_hint;
 #endif
+#endif
 
-}
+}  // namespace detail
 
 
 template <typename T, int_t Alignment = num_bytes_v<T>>
