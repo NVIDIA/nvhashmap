@@ -17,14 +17,9 @@
 
 #pragma once
 
-#include "allocator.hpp"
-#include "hash.hpp"
-#include "kernel.hpp"
-#include "memory.hpp"
+#include "swiss_map_base.hpp"
 #include "probe_seq.hpp"
-
-#include <algorithm>
-#include <variant>
+#include "conf.hpp"
 
 namespace nvhm {
 
@@ -40,1046 +35,1008 @@ namespace nvhm {
  * @tparam MaxProbeLength Caps probe length.
  */
 template <
-  typename Key, typename Value = void, typename RawValue = char, typename Kernel = default_kernel_t,
-  typename ProbeSeq = default_seq_t, bool MinimizePSL = false, bool AutoShrink = false,
-  bool AllowReclaim = true, typename Allocator = default_allocator<>>
-class map {
+  typename Key, typename Value = void,
+  flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
+  typename ProbeSeq = default_seq_t, typename Allocator = default_allocator_t>
+class map : public swiss_map_base<
+  map<Key, Value, Flags, Kernel, ProbeSeq, Allocator>,
+  conf<Key, Value, Flags, Kernel::size>, ProbeSeq, Allocator
+> {
  public:
-  using key_type = Key;
-  using value_type = std::conditional_t<std::is_void_v<Value>, std::monostate, Value>;
-  constexpr static bool has_values{!std::is_same_v<value_type, std::monostate>};
-  using raw_value_type = RawValue;
+  using base_type = swiss_map_base<map, conf<Key, Value, Flags, Kernel::size>, ProbeSeq, Allocator>;
+
+  using self_type = typename base_type::self_type;
+  using conf_type = typename base_type::conf_type;
+
+  using key_type = typename base_type::key_type;
+  using value_type = typename base_type::value_type;
+  using base_type::has_values;
+  using base_type::flags;
+  using base_type::has_blobs;
+  using base_type::kernel_size;
+  
+  using const_entry_type = typename base_type::const_entry_type;
+  using entry_type = typename base_type::entry_type;
+  using const_mapped_type = typename base_type::const_mapped_type;
+  using mapped_type = typename base_type::mapped_type;
+  
+  using probe_seq_type = typename base_type::probe_seq_type;
+  using allocator_type = typename base_type::allocator_type;
 
   using kernel_type = Kernel;
+  static_assert(kernel_type::size == kernel_size, "Provided `kernel::size` configured `kernel_size` do not match!");
+  using kernel_repr_type = typename kernel_type::repr_type;
   using mask_type = typename kernel_type::mask_type;
-  using probe_seq_type = ProbeSeq;
-  constexpr static bool minimize_psl{MinimizePSL};
-  constexpr static bool auto_shrink{AutoShrink};
-  constexpr static bool allow_reclaim{AllowReclaim};
-  using allocator_type = Allocator;
 
-#ifndef NDEBUG
-  using prefetch_type = std::tuple<raw_pos_t>;
-#else
-  using prefetch_type = raw_pos_t;
-#endif
-  using read_pos_type = raw_pos_t;
-  using write_pos_type = raw_pos_t;
-
-  // Not much point in having a table that is smaller than the size of a cache line.
-  constexpr static size_t min_capacity{std::max(cache_line_size, kernel_type::size)};
-  static_assert(has_single_bit(min_capacity));
-  static_assert(min_capacity % kernel_type::size == 0);
-  constexpr static size_t default_capacity{std::max<size_t>(min_capacity, 4096)};
-
-  // Reserve capacity bias and related calculations are always based on the min_capacity.
-  static_assert(min_capacity % 8 == 0);
-  constexpr static size_t max_reserve_capacity_bias{min_capacity / 2};      // 50%
-  constexpr static size_t default_reserve_capacity_bias{min_capacity / 8};  // 12.5%
-  static_assert(default_reserve_capacity_bias <= max_reserve_capacity_bias);
-
-  inline map()
-  : map(default_capacity) {}
-
-  inline map(
-    size_t initial_capacity, const size_t raw_value_size = {},
-    size_t raw_value_alignment = sizeof(float),
-    const size_t reserve_capacity_bias = default_reserve_capacity_bias
-  ) {
-    // Ensure alignment is power-2-based.
-    raw_value_size_ = raw_value_size;
-    raw_value_alignment_ = raw_value_alignment = bit_ceil(raw_value_alignment);
-    raw_value_pitch_ = (raw_value_size + raw_value_alignment - 1) & ~(raw_value_alignment - 1);
-
-    // Bias for controlling preemptive growth.
-    if (reserve_capacity_bias >= max_reserve_capacity_bias) {
-      throw std::out_of_range(
-        "Reserve capacity bias is out of bounds [0, min(64, min_capacity) - 1]!"
-      );
-    }
-    reserve_capacity_bias_ = reserve_capacity_bias;
-
-    initial_capacity = bit_ceil(std::max(initial_capacity, min_capacity));
-    reset_(initial_capacity);
+  constexpr map(const map& other) : base_type{other} {
+    grow_threshold_ = other.grow_threshold_;
+    states_ = make_copy(other.states_, capacity());
+    num_empty_ = other.num_empty_;
+    num_tombstone_ = other.num_tombstone_;
   }
-
-  inline map(const map&) = default;
-  inline map& operator=(const map&) = default;
-
-  inline map(map&&) = default;
-  inline map& operator=(map&&) = default;
-
-  inline ~map() = default;
-
-  inline void swap(map& __restrict that) noexcept {
-    std::swap(raw_value_size_, that.raw_value_size_);
-    std::swap(raw_value_alignment_, that.raw_value_alignment_);
-    std::swap(raw_value_pitch_, that.raw_value_pitch_);
-    std::swap(reserve_capacity_bias_, that.reserve_capacity_bias_);
-
-    std::swap(bucket_mask_, that.bucket_mask_);
-    std::swap(growth_threshold_, that.growth_threshold_);
-    std::swap(states_, that.states_);
-    std::swap(num_used_, that.num_used_);
-    std::swap(num_tombstones_, that.num_tombstones_);
-
-    std::swap(keys_, that.keys_);
-    std::swap(values_, that.values_);
-    std::swap(raw_values_, that.raw_values_);
-  }
-
-  inline size_t raw_value_size() const noexcept { return raw_value_size_; }
-
-  inline size_t capacity() const noexcept { return bucket_mask_ + kernel_type::size; }
-
-  inline size_t size() const noexcept { return num_used_ - num_tombstones_; }
-
-  inline bool empty() const noexcept { return size() == 0; }
-
-  inline bool full() const noexcept { return size() == capacity(); }
-
- public:
-  /**
-   * Mark all slots as free.
-   */
-  inline void clear() {
-    bool should_shrink;
-    if constexpr (auto_shrink) {
-      should_shrink = capacity() > min_capacity;
-    } else {
-      should_shrink = false;
-    }
-
-    if (should_shrink) {
-      reset_(min_capacity);
-    } else {
-      std::fill_n(states_.get(), capacity(), kernel_type::empty);
-      num_used_ = {};
-      num_tombstones_ = {};
-    }
-  }
-
-  /**
-   * Check whether the provided `key` is currently in the map.
-   *
-   * @param key The key to find.
-   * @return Whether or not the key is in the map.
-   */
-  inline bool contains(const key_type& key) const noexcept { return lookup(key) != npos; }
-
-  /**
-   * Check whether the provided `key` is currently in the map.
-   *
-   * @param key The key to find.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return Whether or not the key is in the map.
-   */
-  inline bool contains(const key_type& key, const prefetch_type& pre) const noexcept {
-    return lookup(key, pre) != npos;
-  }
-
-  /**
-   * Find the key in the map, and mark the slot as free.
-   *
-   * @param key The key to find.
-   * @return True if the key was in the map (i.e., the erasure was successful).
-   */
-  inline bool erase(const key_type& key) {
-    psl_t psl;
-    return erase_(key, psl, key_to_hash(key));
-  }
-
-  /**
-   * Find the key in the map, and mark the slot as free.
-   *
-   * @param key The key to find.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return True if the key was in the map (i.e., the erasure was successful).
-   */
-  inline bool erase(const key_type& key, const prefetch_type& pre) {
-    psl_t psl;
-#ifndef NDEBUG
-    return erase_(key, psl, std::get<0>(pre));
-#else
-    return erase_(key, psl, pre);
-#endif
-  }
-
-  /**
-   * Erase whatever key was at the provided map-position.
-   *
-   * @param pos The position to investigate.
-   * @return True if the position was occupied (i.e., the erasure was successful).
-   */
-  inline bool erase_at(const write_pos_type& __restrict pos) {
-    return pos < capacity() ? erase_at_(pos) : false;
-  }
-
-  /**
-   * Locate a key in the map and return its position.
-   *
-   * @param key The key to find.
-   * @return The position of the key, if it exists in the table, otherwise `npos`.
-   */
-  inline read_pos_type lookup(const key_type& key) const noexcept {
-    psl_t psl;
-    return find_(key, psl, key_to_hash(key));
-  }
-
-  /**
-   * Locate a key in the map and return its position.
-   *
-   * @param key The key to find.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return The position of the key, if it exists in the table, otherwise `npos`.
-   */
-  inline read_pos_type lookup(const key_type& key, const prefetch_type& pre) const noexcept {
-    psl_t psl;
-#ifndef NDEBUG
-    return find_(key, psl, std::get<0>(pre));
-#else
-    return find_(key, psl, pre);
-#endif
-  }
-
-  /**
-   * Locate a key in the map and return its position.
-   *
-   * @param key The key to find.
-   * @return The position of the key, if it exists in the table, otherwise `npos`.
-   */
-  inline write_pos_type update(const key_type& key) noexcept {
-    psl_t psl;
-    return find_(key, psl, key_to_hash(key));
-  }
-
-  /**
-   * Locate a key in the map and return its position.
-   *
-   * @param key The key to find.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return The position of the key, if it exists in the table, otherwise `npos`.
-   */
-  inline write_pos_type update(const key_type& key, const prefetch_type& pre) noexcept {
-    psl_t psl;
-#ifndef NDEBUG
-    return find_(key, psl, std::get<0>(pre));
-#else
-    return find_(key, psl, pre);
-#endif
-  }
-
-  /**
-   * Inserts a key into the map if it doesn't exist yet. Grows the map if necessary.
-   *
-   * @param key The key to find/insert.
-   * @return The position of the key.
-   */
-  inline write_pos_type upsert(const key_type& key) {
-    std::monostate it;
-    return upsert(key, it);
-  }
-
-  /**
-   * Inserts a key into the map if it doesn't exist yet. Grows the map if necessary.
-   *
-   * @param key The key to find/insert.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return The position of the key.
-   */
-  inline write_pos_type upsert(const key_type& key, const prefetch_type& pre) {
-    std::monostate it;
-    return upsert(key, it, pre);
-  }
-
-  /**
-   * Inserts a key into the map if it doesn't exist yet. Grows the map if necessary. Increments
-   * supplied iterattor if the key was actually inserted.
-   *
-   * @param key The key to find/insert.
-   * @param it Some iterator to increment.
-   * @return The position of the key.
-   */
-  template <typename It>
-  inline write_pos_type upsert(const key_type& key, It& it) {
-    psl_t psl;
-    return insert_(key, psl, it, key_to_hash(key));
-  }
-
-  /**
-   * Inserts a key into the map if it doesn't exist yet. Grows the map if necessary. Increments
-   * supplied iterattor if the key was actually inserted.
-   *
-   * @param key The key to find/insert.
-   * @param it Some iterator to increment.
-   * @param pre Prefetch token retunred by previous call `prefetch_*`.
-   * @return The position of the key.
-   */
-  template <typename It>
-  inline write_pos_type upsert(const key_type& key, It& it, const prefetch_type& pre) {
-    psl_t psl;
-#ifndef NDEBUG
-    return insert_(key, psl, it, std::get<0>(pre));
-#else
-    return insert_(key, psl, it, pre);
-#endif
-  }
-
-  /**
-   * Decode the key and prefetch memory to facilitate a future `lookup`-operation.
-   *
-   * @param key The key to prefetch.
-   * @param optimistic If `true`, will do a more thorough prefetch.
-   * @return Prefetch token. Intended to be used in conjunction with `find_ex`.
-   */
-  inline prefetch_type read_prefetch(const key_type& key, const bool optimistic) const noexcept {
-    const size_t bucket_mask{bucket_mask_};
-    const state_t* const __restrict states{states_.get()};
-
-    const hash_t h{key_to_hash(key)};
-    const raw_pos_t off{hash_to_pos<kernel_type>(h, bucket_mask)};
-
-    nvhm::read_prefetch<kernel_type::size>(&states[off]);
-    if (optimistic) {
-      const key_type* const __restrict keys{keys_.get()};
-      nvhm::read_prefetch<kernel_type::size * sizeof(key_type)>(&keys[off]);
-    }
-
-#ifndef NDEBUG
-    return {h};
-#else
-    return h;
-#endif
-  }
-
-  /**
-   * Decode the key and prefetch memory to facilitate a future update` or `upsert`-operation.
-   *
-   * @param key The key to prefetch.
-   * @param optimistic If `true`, will do a more thorough prefetch.
-   * @return Prefetch token. Intended to be used in conjunction with `insert_ex`.
-   */
-  inline prefetch_type write_prefetch(const key_type& key, const bool optimistic) noexcept {
-    const size_t bucket_mask{bucket_mask_};
-    state_t* const __restrict states{states_.get()};
-
-    const hash_t h{key_to_hash(key)};
-    const raw_pos_t off{hash_to_pos<kernel_type>(h, bucket_mask)};
-
-    nvhm::write_prefetch<kernel_type::size>(&states[off]);
-    if (optimistic) {
-      key_type* const __restrict keys{keys_.get()};
-      nvhm::write_prefetch<kernel_type::size * sizeof(key_type)>(&keys[off]);
-    }
-
-#ifndef NDEBUG
-    return {h};
-#else
-    return h;
-#endif
-  }
-
- public:
-  /**
-   * Scan through the map and return the position of the matching entry.
-   *
-   * @return The position of the valid key, or `npos`.
-   */
-  inline read_pos_type find_if(
-    const std::function<bool(const read_pos_type&)>& __restrict f
-  ) const {
-    const state_t* const __restrict states{states_.get()};
+  constexpr map& operator=(const map& __restrict other) {
+    if (self() == &other) return *self();
+    base_type::operator=(other);
 
     const raw_pos_t end{capacity()};
-    for (raw_pos_t off{}; off != end; off += kernel_type::size) {
-      const auto kern{kernel_type::load(&states[off])};
+    NVHM_ASSERT_(end == other.capacity(), "end = ", end, ", other.capacity = ", other.capacity());
 
-      auto mask{kernel_type::mask_hash(kern)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        const read_pos_type pos{mask_type::next(mask, off)};
-        if (f(pos)) return pos;
-      }
-    }
-
-    return npos;
+    grow_threshold_ = other.grow_threshold_;
+    std::copy_n(other.states_.get(), end, states_.get());
+    num_empty_ = other.num_empty_;
+    num_tombstone_ = other.num_tombstone_;
+    return *self();
   }
+  constexpr map(map&& other) noexcept = default;
+  constexpr map& operator=(map&& other) noexcept = default;
 
-  /**
-   * Scan through the map and return the position of the matching entry.
-   *
-   * @return The position of the valid key, or `npos`.
-   */
-  inline write_pos_type find_if(const std::function<bool(const write_pos_type&)>& __restrict f) {
-    const state_t* const __restrict states{states_.get()};
-
+  constexpr map() : map{conf_type()} {}
+  constexpr map(int_t init_capacity) : map{conf_type().set_capacity(init_capacity)} {}
+  constexpr map(const conf_type& conf) : base_type{conf} {
     const raw_pos_t end{capacity()};
-    for (raw_pos_t off{}; off != end; off += kernel_type::size) {
-      const auto kern{kernel_type::load(&states[off])};
-
-      auto mask{kernel_type::mask_hash(kern)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        const write_pos_type pos{mask_type::next(mask, off)};
-        if (f(pos)) return pos;
-      }
-    }
-
-    return npos;
+    grow_threshold_ = conf.grow_threshold(end);
+    states_ = make_unique<state_t, allocator_type>(end);
+    reset_();
   }
 
-  /**
-   * Scan through the map and return the position of the first valid entry.
-   *
-   * @return The position of the valid key, or `npos`.
-   */
-  inline read_pos_type first() const noexcept {
-    return find_if([](const read_pos_type&) { return true; });
-  }
-
-  /**
-   * Scan through the map and return the position of the first valid entry.
-   *
-   * @return The position of the valid key, or `npos`.
-   */
-  inline write_pos_type first() noexcept {
-    return find_if([](const write_pos_type&) { return true; });
-  }
-
-  /**
-   * Iterate over the map and call a function for each filled slot.
-   *
-   * @param f The function to call.
-   */
-  inline void for_each(const std::function<void(const read_pos_type&)>& __restrict f) const {
-    const state_t* const __restrict states{states_.get()};
-
-    const raw_pos_t end{capacity()};
-    for (raw_pos_t off{}; off != end; off += kernel_type::size) {
-      const auto kern{kernel_type::load(&states[off])};
-
-      auto mask{kernel_type::mask_hash(kern)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        f(mask_type::next(mask, off));
-      }
-    }
-  }
-
-  /**
-   * Retrieve all keys in the map.
-   *
-   * @param it An output iterator to write the keys to.
-   */
-  template <typename OutIt>
-  inline OutIt keys(OutIt it) const noexcept {
-    for_each([&](const read_pos_type& __restrict pos) { *it++ = key_at(pos); });
-    return it;
-  }
-
-  /**
-   * Retrieve all keys and values in the map.
-   *
-   * @param it An output iterator to write the keys and values to.
-   */
-  template <typename OutIt>
-  inline OutIt keys_and_values(OutIt it) const noexcept {
-    for_each([&](const read_pos_type& __restrict pos) { *it++ = {key_at(pos), value_at(pos)}; });
-    return it;
-  }
-
-  /**
-   * Retrieve all valid map positions.
-   *
-   * @param it An output iterator to write the positions to.
-   */
-  template <typename OutIt>
-  inline OutIt read_positions(OutIt it) const noexcept {
-    for_each([&](const read_pos_type& __restrict pos) { *it++ = pos; });
-    return it;
-  }
-
-  /**
-   * Quickly transform all normal values.
-   *
-   * @param f The transformation to apply.
-   */
-  inline void transform_values(const std::function<void(value_type&)>& __restrict f) {
-    value_type* const __restrict values{values_.get()};
-    std::for_each(values, &values[capacity()], f);
-  }
-
-  /**
-   * Quickly transform all raw values.
-   *
-   * @param f The transformation to apply.
-   */
-  inline void transform_raw_values(
-    const std::function<raw_value_type(raw_value_type)>& __restrict f
-  ) {
-    raw_value_type* const __restrict raw_values{raw_values_.get()};
-    std::transform(raw_values, &raw_values[capacity() * raw_value_pitch_], raw_values, f);
-  }
-
- public:
-  /**
-   * Number of slots currently occupied with a valid hash.
-   */
-  inline size_t num_used() const noexcept { return num_used_; }
-
-  /**
-   * Number of slots currently occupied buy tombstone markers.
-   */
-  inline size_t num_tombstones() const noexcept { return num_tombstones_; }
-
+  using base_type::capacity;
+  using base_type::self;
+  using base_type::size;
+  
   /**
    * Returns the current growth limit of the map.
    *
    * @return The limit beyond which the next growth can happen.
    */
-  inline size_t growth_threshold() const noexcept { return growth_threshold_; }
+  constexpr int_t grow_threshold() const noexcept { return grow_threshold_; }
 
-  /**
-   * Check if a map grow.
-   *
-   * @return Whether or not the table should grow.
-   */
-  inline bool should_grow() const noexcept { return num_used_ >= growth_threshold_; }
+  constexpr friend void swap(map& lhs, map& rhs) noexcept {
+    if (&lhs == &rhs) return;
+    swap(static_cast<base_type&>(lhs), static_cast<base_type&>(rhs));
 
-  /**
-   * Check if the table is supposed to shrink.
-   *
-   * @return Whether or not the table should shrink.
-   */
-  inline bool should_shrink() const noexcept {
-    const size_t cap{capacity()};
-    return cap > min_capacity && size() < cap / 4;
-  }
-
-  /**
-   * Check if the table is supposed to be compacted.
-   *
-   * @return Whether or not the table should be compacted.
-   */
-  inline bool should_compact() const noexcept { return num_tombstones_ >= capacity() / 4; }
-
-  /**
-   * Grow the table now.
-   */
-  inline void grow() { realloc_(capacity() << 1); }
-
-  /**
-   * Apply table compactification now.
-   */
-  inline void compact() {
-    if (num_tombstones_) {
-      realloc_(capacity());
-    }
-  }
-
-  /**
-   * Optimize the table, eventually freeing up some space.
-   */
-  inline void optimize() {
-    if (should_shrink()) {
-      NVHM_DBG_LOG_(
-        "should shrink, size/capacity:", size(), '/', capacity(),
-        ", before shrink: ", should_shrink(), '\n'
-      );
-      realloc_(std::max(capacity() >> 1, min_capacity));
-      NVHM_DBG_LOG_(
-        "should shrink, size/capacity:", size(), '/', capacity(),
-        ", after shrink: ", should_shrink(), '\n'
-      );
-    } else {
-      compact();
-    }
-  }
-
- public:
-  /**
-   * Check if the slot at `pos` is occupied.
-   *
-   * @param pos The position to query.
-   * @return True if the slot contains a key.
-   */
-  inline bool is_occupied(const read_pos_type& __restrict pos) const noexcept {
-    return slot_is_occupied(state_at(pos));
-  }
-
-  /**
-   * Fetch the state/fingerprint of `pos`.
-   *
-   * @param pos The position to query.
-   * @return The associated slot data.
-   */
-  inline state_t state_at(const read_pos_type& __restrict pos) const noexcept {
-    NVHM_ASSERT_(pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
-    return states_[pos];
-  }
-
-  /**
-   * Fetch the key at `pos`.
-   *
-   * @param pos The position to query.
-   * @return The associated key.
-   */
-  inline const key_type& key_at(const read_pos_type& __restrict pos) const noexcept {
-    NVHM_ASSERT_(is_occupied(pos));
-    return keys_[pos];
-  }
-
-  /**
-   * Fetch the value for `pos`.
-   *
-   * @param pos The position to query.
-   * @return The associated value.
-   */
-  inline const value_type& value_at(const read_pos_type& __restrict pos) const noexcept {
-    static_assert(has_values);
-    NVHM_ASSERT_(is_occupied(pos));
-    return values_[pos];
-  }
-
-  /**
-   * Fetch the value for `pos`.
-   *
-   * @param pos The position to query.
-   * @return The associated value.
-   */
-  inline value_type& value_at(const write_pos_type& __restrict pos) noexcept {
-    static_assert(has_values);
-    NVHM_ASSERT_(is_occupied(pos));
-    return values_[pos];
-  }
-
-  /**
-   * Fetch pointer to the raw values for `pos`.
-   *
-   * @param pos The position to query.
-   * @return Pointer the associated raw values.
-   */
-  inline const raw_value_type* raw_values_at(const read_pos_type& __restrict pos) const noexcept {
-    NVHM_ASSERT_(is_occupied(pos));
-    NVHM_ASSERT_(raw_value_pitch_, "raw_value_pitch = ", raw_value_pitch_);
-    return &raw_values_[pos * raw_value_pitch_];
-  }
-
-  /**
-   * Fetch pointer to the raw values for `pos`.
-   *
-   * @param pos The position to query.
-   * @return Pointer the associated raw values.
-   */
-  inline raw_value_type* raw_values_at(const write_pos_type& __restrict pos) noexcept {
-    NVHM_ASSERT_(is_occupied(pos));
-    NVHM_ASSERT_(raw_value_pitch_, "raw_value_pitch = ", raw_value_pitch_);
-    return &raw_values_[pos * raw_value_pitch_];
-  }
-
-  inline void get_raw_values_at(
-    const read_pos_type& pos, raw_value_type* const dst, const size_t n
-  ) const noexcept {
-    NVHM_ASSERT_(n <= raw_value_size_, "n = ", n, ", raw_value_size = ", raw_value_size_);
-    fast_copy(dst, raw_values_at(pos), n);
-  }
-
-  inline void set_raw_values_at(
-    const write_pos_type& pos, const raw_value_type* const src, const size_t n
-  ) noexcept {
-    NVHM_ASSERT_(n <= raw_value_size_, "n = ", n, ", raw_value_size = ", raw_value_size_);
-    fast_copy(raw_values_at(pos), src, n);
-  }
-
- public:
-  inline psl_t psl(const key_type& key) const noexcept {
-    psl_t psl;
-    find_(key, psl, key_to_hash(key));
-    return psl;
-  }
-
-  inline std::array<size_t, kernel_type::size> state_collisions() const {
-    state_t* const __restrict states{states_.get()};
-    std::array<size_t, kernel_type::size> res{};
-
-    const raw_pos_t end{capacity()};
-    for (raw_pos_t off{}; off != end; off += kernel_type::size) {
-      const auto kern{kernel_type::load(&states[off])};
-
-      std::array<state_t, kernel_type::size> tmp;
-      size_t n{};
-
-      auto mask{kernel_type::mask_hash(kern)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        const size_t i{mask_type::next(mask)};
-        NVHM_ASSERT_(n < kernel_type::size);
-        tmp[n++] = kernel_type::at(kern, i);
-      }
-      std::sort(tmp.begin(), tmp.begin() + n);
-
-      const auto tmp_end{std::unique(tmp.begin(), tmp.begin() + n)};
-      for (auto it{tmp.begin()}; it != tmp_end; ++it) {
-        mask = kernel_type::mask(kern, *it);
-        ++res[mask_type::count(mask) - 1];
-      }
-    }
-
-    return res;
+    std::swap(lhs.grow_threshold_, rhs.grow_threshold_);
+    std::swap(lhs.states_, rhs.states_);
+    std::swap(lhs.num_empty_, rhs.num_empty_);
+    std::swap(lhs.num_tombstone_, rhs.num_tombstone_);
   }
 
  protected:
-  inline bool erase_(const key_type& __restrict k, psl_t& __restrict psl, const hash_t h) {
-    NVHM_ASSERT_(key_to_hash(k) == h, "Supplied key and hash do not match!");
-    const size_t bucket_mask{bucket_mask_};
-    state_t* const __restrict states{states_.get()};
+  template <typename, typename, typename, typename>
+  friend class raw_map_base;
+  template <typename, typename, typename, typename> 
+  friend class swiss_map_base;
+
+  using base_type::conf_;
+  using base_type::bucket_mask_;
+  using base_type::values_;
+  using base_type::blobs_;
+  using base_type::keys_;
+  int_t grow_threshold_;
+  unique_ptr_t<state_t[], allocator_type> states_;
+  int_t num_empty_;
+  int_t num_tombstone_;
+
+  using base_type::contains_at_;
+
+  constexpr raw_pos_t alloc_(raw_pos_t end) {
+    end = base_type::alloc_(end);
+
+    grow_threshold_ = conf_.grow_threshold(end);
+    states_ = make_unique<state_t, allocator_type>(end);
+    return end;
+  }
+
+  constexpr int_t bucket_size_at_(const raw_pos_t pos) const noexcept {
+    NVHM_ASSERT_(pos >= 0 && pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
+    const state_t* const __restrict states{states_.get()};
+
+    const raw_pos_t off{align_pos<~kernel_type::size_mask>(pos)};
+    const auto k{kernel_type::load(&states[off])};
+    // TODO: Add optimized kernel function for this?
+    return mask_type::count(kernel_type::mask_hash(k));
+  }
+
+  constexpr int_t bucket_num_empty_slots_at_(const raw_pos_t pos) const noexcept {
+    NVHM_ASSERT_(pos >= 0 && pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
+    const state_t* const __restrict states{states_.get()};
+
+    const raw_pos_t off{align_pos<~kernel_type::size_mask>(pos)};
+    const auto k{kernel_type::load(&states[off])};
+    // TODO: Add optimized kernel function for this?
+    return mask_type::count(kernel_type::mask_empty(k));
+  }
+
+  constexpr int_t bucket_num_tombstone_slots_at_(const raw_pos_t pos) const noexcept {
+    NVHM_ASSERT_(pos >= 0 && pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
+    const state_t* const __restrict states{states_.get()};
+
+    const raw_pos_t off{align_pos<~kernel_type::size_mask>(pos)};
+    const auto k{kernel_type::load(&states[off])};
+    // TODO: Add optimized kernel function for this?
+    return mask_type::count(kernel_type::mask_tombstone(k));
+  }
+
+  constexpr bool check_integrity_() const noexcept {
+    const int_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
+    
+    int_t num_empty{};
+    int_t num_tombstone{};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+      
+      // TODO: Add optimized kernel function for this?
+      num_empty += mask_type::count(kernel_type::mask_empty(k));
+      num_tombstone += mask_type::count(kernel_type::mask_tombstone(k));
+    }
+
+    NVHM_ASSERT_(num_empty == num_empty_, "num_empty = ", num_empty, ", num_empty_ = ", num_empty_);
+    NVHM_ASSERT_(num_tombstone == num_tombstone_, "num_tombstone = ", num_tombstone, ", num_tombstone_ = ", num_tombstone_);
+    return num_empty == num_empty_ && num_tombstone == num_tombstone_;
+  }
+
+  constexpr int_t clear_() {
+    if constexpr (test_flags(flags, flags_t::auto_shrink)) {
+      int_t end{conf_.init_capacity()};
+      if (end != capacity()) {
+        end = alloc_(end);
+      }
+      NVHM_ASSERT_(end == capacity(), "end = ", end, ", capacity = ", capacity());
+    }
+    return reset_();
+  }
+
+  constexpr void count_state_collisions_(std::array<int_t, kernel_size>& counts) const noexcept {
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      count_collisions<kernel_type>(&states[off], counts);
+    }
+  }
+
+  constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(const key_type& __restrict key, const hash_t hash) {
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
     const key_type* const __restrict keys{keys_.get()};
+    state_t* const __restrict states{states_.get()};
 
-    const state_t s{hash_to_state(h)};
+    const state_t s{hash_to_state(hash)};
+    const raw_pos_t end{aligned_mask_to_capacity<kernel_size>(bucket_mask)};
 
-    raw_pos_t seq{hash_to_pos<kernel_type>(h, bucket_mask)};
-    for (psl = {}; probe_seq_type::has_next(psl);) {
-      NVHM_ASSERT_(
-        psl != static_cast<psl_t>(capacity()), "The table is full. This should not happen!"
-      );
+    probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+    for (; seq.has_next(); seq += kernel_size) {
+      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
-      const raw_pos_t off{probe_seq_type::next(seq, psl, bucket_mask)};
-      psl += kernel_type::size;
-      const auto kern{kernel_type::load(&states[off])};
+      const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+      const auto k{kernel_type::load(&states[off])};
 
       // Is the key present in this bucket?
-      auto mask{kernel_type::mask(kern, s)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        const raw_pos_t pos{mask_type::next(mask, off)};
-        if (NVHM_UNLIKELY_(keys[pos] != k)) continue;
-
-        bool can_reclaim;
-        if constexpr (allow_reclaim) {
-          can_reclaim = kernel_type::has_empty(kern);
-        } else {
-          can_reclaim = false;
-        }
-        release_slot_(states[pos], can_reclaim);
-
-        if constexpr (auto_shrink) {
-          if (NVHM_UNLIKELY_(should_shrink())) {
-            NVHM_DBG_LOG_(
-              "should shrink, size/capacity:", size(), '/', capacity(),
-              ", before shrink: ", should_shrink(), '\n'
-            );
-            realloc_(std::max(capacity() >> 1, min_capacity));
-            NVHM_DBG_LOG_(
-              "should shrink, size/capacity:", size(), '/', capacity(),
-              ", after shrink: ", should_shrink(), '\n'
-            );
-          }
-        }
-
-        return true;
+      for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        raw_pos_t pos{mask_type::next(m, off)};
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+        
+        pos = reset_slot_(end, states[pos], kernel_type::has_empty(k)) ? pos : npos;
+        return {true, pos, std::move(seq)};
       }
 
       // Empty slots mark the end of a probe sequence.
-      if (NVHM_LIKELY_(kernel_type::has_empty(kern))) break;
-      seq = probe_seq_type::step(seq, psl, bucket_mask);
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
     }
 
-    return false;
+    return {false, npos, std::move(seq)};
   }
 
-  inline bool erase_at_(const raw_pos_t pos) {
-    NVHM_ASSERT_(pos < capacity(), "`pos` is out of bounds");
+  template <typename PS>
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) {
+    static_assert(test_flags(flags, flags_t::duplicates), "Only permissible in containers that allow `duplicate` keys!");
+    static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
+    NVHM_ASSERT_(align_pos(seq.psl(), bucket_mask) == seq.psl(), "psl = ", seq.psl(), ", bucket_mask = ", std::hex, bucket_mask, std::dec);
+    const key_type* const __restrict keys{keys_.get()};
     state_t* const __restrict states{states_.get()};
 
-    bool can_reclaim;
-    if constexpr (allow_reclaim) {
-      const raw_pos_t off{pos & ~kernel_type::size_mask};
-      const auto kern{kernel_type::load(&states[off])};
+    const state_t s{hash_to_state(hash)};
+    const raw_pos_t end{aligned_mask_to_capacity<kernel_size>(bucket_mask)};
+    NVHM_ASSERT_(pos >= 0 && pos < end, "pos = ", pos, ", capacity = ", end);
 
-      // Can reclaim if have an empty slot is nearby.
-      if (slot_not_occupied(kernel_type::at(kern, pos - off))) return false;
-      can_reclaim = kernel_type::has_empty(kern);
-    } else {
-      if (slot_not_occupied(states[pos])) return false;
-      can_reclaim = false;
-    }
-    release_slot_(states[pos], can_reclaim);
+    auto [off, idx]{splice_pos<kernel_size>(pos)};
+    NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
+    NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
-    if constexpr (auto_shrink) {
-      if (should_shrink()) {
-        NVHM_DBG_LOG_(
-          "should shrink, size/capacity:", size(), '/', capacity(),
-          ", before shrink: ", should_shrink(), '\n'
-        );
-        realloc_(capacity() > 1);
-        NVHM_DBG_LOG_(
-          "should shrink, size/capacity:", size(), '/', capacity(),
-          ", after shrink: ", should_shrink(), '\n'
-        );
+    if (idx >= kernel_size - 1) {
+      seq += kernel_size;
+      if (NVHM_UNLIKELY_(!seq.has_next())) {
+        return {false, npos, std::move(seq)};
       }
+      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      off = align_pos(seq.next(), bucket_mask);
+      idx = -1;
     }
-    return true;
+
+    auto k{kernel_type::load(&states[off])};
+    auto m{kernel_type::mask(k, s)};
+    m = mask_type::above(m, idx);
+
+    while (true) {
+      // Is the key present in this bucket?
+      for (; mask_type::has_next(m); m = mask_type::step(m)) {
+        pos = mask_type::next(m, off);
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+
+        pos = reset_slot_(end, states[pos], kernel_type::has_empty(k)) ? pos : npos;
+        return {true, pos, std::move(seq)};
+      }
+
+      // Empty slots mark the end of a probe sequence.
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
+
+      seq += kernel_size;
+      if (!seq.has_next()) break;
+      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+
+      off = align_pos(seq.next(), bucket_mask);
+      k = kernel_type::load(&states[off]);
+      m = kernel_type::mask(k, s);
+    }
+
+    return {false, npos, std::move(seq)};
   }
 
-  inline raw_pos_t find_(
-    const key_type& __restrict k, psl_t& __restrict psl, const hash_t h
-  ) const noexcept {
-    NVHM_ASSERT_(key_to_hash(k) == h, "Supplied key and hash do not match!");
-    const size_t bucket_mask{bucket_mask_};
-    const state_t* const __restrict states{states_.get()};
+  NVHM_ALWAYS_INLINE constexpr std::pair<bool, raw_pos_t> erase_at_(raw_pos_t pos) {
+    NVHM_ASSERT_(pos >= 0 && pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
+    const raw_pos_t end{capacity()};
+    state_t* const __restrict states{states_.get()};
+
+    const auto [off, idx]{splice_pos<kernel_size>(pos)};
+    
+    const auto k{kernel_type::load(&states[off])};
+    if (NVHM_LIKELY_(is_hash(kernel_type::at(k, idx)))) {
+      pos = reset_slot_(end, states[pos], kernel_type::has_empty(k)) ? pos : npos;
+      return {true, pos};
+    }
+  
+    return {false, pos};
+  }
+
+  template <typename Pred>
+  NVHM_ALWAYS_INLINE constexpr int_t erase_if_(const Pred& __restrict pred) {
+    static_assert(std::is_invocable_r_v<bool, Pred, raw_pos_t>, "`pred` must be pred(raw_pos_t) -> bool");
+
+    const raw_pos_t end{capacity()};
+    state_t* const __restrict states{states_.get()};
+
+    int_t num_empty{num_empty_};
+    int_t num_tombstone{num_tombstone_};
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+
+      for (auto m{kernel_type::mask_hash(k)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const raw_pos_t pos{mask_type::next(m, off)};
+        if (!pred(pos)) continue;
+
+        if (kernel_type::has_empty(k)) {
+          states[pos] = kernel_type::empty;
+          ++num_empty;
+        } else {
+          states[pos] = kernel_type::tombstone;
+          ++num_tombstone;
+        }
+      }
+    }
+
+    const int_t num_emptied{num_empty - num_empty_};
+    const int_t num_burried{num_tombstone - num_tombstone_};
+
+    const int_t num_erased{num_emptied + num_burried};
+    if (NVHM_LIKELY_(num_erased)) {
+      num_empty_ = num_empty;
+      num_tombstone_ = num_tombstone;
+      NVHM_ASSERT_(check_integrity_());
+
+      auto_shrink_and_scub_(end, num_emptied, num_burried);
+    }
+    return num_erased;
+  }
+
+  NVHM_ALWAYS_INLINE constexpr int_t erase_all_(const key_type& __restrict key, const hash_t hash) {
+    if constexpr (!test_flags(flags, flags_t::duplicates)) {
+      return std::get<0>(erase_first_(key, hash));
+    }
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
     const key_type* const __restrict keys{keys_.get()};
+    state_t* const __restrict states{states_.get()};
 
-    const state_t s{hash_to_state(h)};
+    const state_t s{hash_to_state(hash)};
 
-    raw_pos_t seq{hash_to_pos<kernel_type>(h, bucket_mask)};
-    for (psl = {}; probe_seq_type::has_next(psl);) {
-      NVHM_ASSERT_(
-        psl != static_cast<psl_t>(capacity()), "The table is full. This should not happen!"
-      );
+    int_t num_empty{num_empty_};
+    int_t num_tombstone{num_tombstone_};
+    probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+    for (; seq.has_next(); seq += kernel_size) {
+      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
-      const raw_pos_t off{probe_seq_type::next(seq, psl, bucket_mask)};
-      psl += kernel_type::size;
-      const auto kern{kernel_type::load(&states[off])};
+      const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+      const auto k{kernel_type::load(&states[off])};
 
-      // if constexpr (kernel_type::size * sizeof(key_type) <= cache_line_size) {
+      // Is the key present in this bucket?
+      for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const raw_pos_t pos{mask_type::next(m, off)};
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+
+        if (kernel_type::has_empty(k)) {
+          states[pos] = kernel_type::empty;
+          ++num_empty;
+        } else {
+          states[pos] = kernel_type::tombstone;
+          ++num_tombstone;
+        }
+      }
+
+      // Empty slots mark the end of a probe sequence.
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
+    }
+
+    const int_t num_emptied{num_empty - num_empty_};
+    const int_t num_burried{num_tombstone - num_tombstone_};
+
+    const int_t num_erased{num_emptied + num_burried};
+    if (NVHM_LIKELY_(num_erased)) {
+      num_empty_ = num_empty;
+      num_tombstone_ = num_tombstone;
+      NVHM_ASSERT_(check_integrity_());
+
+      const raw_pos_t end{aligned_mask_to_capacity<kernel_size>(bucket_mask)};
+      auto_shrink_and_scub_(end, num_emptied, num_burried);
+    }
+    return num_erased;
+  }
+
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_first_(const key_type& __restrict key, const hash_t hash) const {
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
+    const key_type* const __restrict keys{keys_.get()};
+    const state_t* const __restrict states{states_.get()};
+
+    const state_t s{hash_to_state(hash)};
+
+    probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+    for (; seq.has_next(); seq += kernel_size) {
+      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+
+      const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+      const auto k{kernel_type::load(&states[off])};
+
+      // if constexpr (kernel_size * sizeof(key_type) <= cache_line_size) {
       //   // TODO: Is this still necessary if we use explicit prefetch?
-      //   // TODO: The question is, how optimistic are we are bout the PSL and the success chance.
-      //   nvhm::read_prefetch<kernel_type::size * sizeof(key_type)>(&keys[off]);
+      //   // TODO: The question is, how optimistic are we are about the PSL and the success chance.
+      //   // TODO: Also, should we prefetch more than one cache line here?
+      //   nvhm::read_prefetch<kernel_size>(&keys[off]);
       // }
 
       // Is the key present in this bucket?
-      auto mask{kernel_type::mask(kern, s)};
-      for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-        const raw_pos_t pos{mask_type::next(mask, off)};
-        if (NVHM_LIKELY_(keys[pos] == k)) {
-          return pos;
+      for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const raw_pos_t pos{mask_type::next(m, off)};
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+
+        return {pos, std::move(seq)};
+      }
+
+      // Empty slots mark the end of a probe sequence.
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
+    }
+
+    return {npos, std::move(seq)};
+  }
+
+  template <typename PS>
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) const {
+    static_assert(test_flags(flags, flags_t::duplicates), "Only permissible in containers that allow `duplicate` keys!");
+    static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
+    const key_type* const __restrict keys{keys_.get()};
+    const state_t* const __restrict states{states_.get()};
+
+    const state_t s{hash_to_state(hash)};
+    const raw_pos_t end{aligned_mask_to_capacity<kernel_size>(bucket_mask)};
+    NVHM_ASSERT_(pos >= 0 && pos < end, "pos = ", pos, ", capacity = ", end);
+
+    auto [off, idx]{splice_pos<kernel_size>(pos)};
+    NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
+    NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+
+    if (idx >= kernel_size - 1) {
+      seq += kernel_size;
+      if (NVHM_UNLIKELY_(!seq.has_next())) {
+        return {npos, std::move(seq)};
+      }
+      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      off = align_pos(seq.next(), bucket_mask);
+      idx = -1;
+    }
+
+    auto k{kernel_type::load(&states[off])};
+    auto m{kernel_type::mask(k, s)};
+    m = mask_type::above(m, idx);
+
+    while (true) {
+      // Is the key present in this bucket?
+      for (; mask_type::has_next(m); m = mask_type::step(m)) {
+        pos = mask_type::next(m, off);
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+
+        return {pos, std::move(seq)};
+      }
+
+      // Empty slots mark the end of a probe sequence.
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
+      
+      seq += kernel_size;
+      if (!seq.has_next()) break;
+      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+
+      off = align_pos(seq.next(), bucket_mask);
+      k = kernel_type::load(&states[off]);
+      m = kernel_type::mask(k, s);
+    }
+
+    return {npos, std::move(seq)};
+  }
+
+  template <typename Pred>
+  NVHM_ALWAYS_INLINE constexpr raw_pos_t find_if_(const Pred& __restrict pred) const {
+    static_assert(std::is_invocable_r_v<bool, Pred, raw_pos_t>, "`pred` must be pred(raw_pos_t) -> bool");
+
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+
+      for (auto m{kernel_type::mask_hash(k)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const raw_pos_t pos{mask_type::next(m, off)};
+        if (pred(pos)) return pos;
+      }
+    }
+    return npos;
+  }
+
+  template <typename Func>
+  NVHM_ALWAYS_INLINE constexpr void for_each_(const Func& __restrict func) const {
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+
+      for (auto m{kernel_type::mask_hash(k)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        func(mask_type::next(m, off));
+      }
+    }
+  }
+
+  template <typename Func>
+  NVHM_ALWAYS_INLINE constexpr void for_each_(const key_type& __restrict key, const hash_t hash, const Func& __restrict func) const {
+    static_assert(std::is_invocable_v<Func, raw_pos_t, probe_seq_type>, "`func` must be `func(raw_pos_t, probe_seq_type)`!");
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    const bitmask_t bucket_mask{bucket_mask_};
+    const key_type* const __restrict keys{keys_.get()};
+    const state_t* const __restrict states{states_.get()};
+
+    const state_t s{hash_to_state(hash)};
+
+    probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+    for (; seq.has_next(); seq += kernel_size) {
+      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+
+      const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+      const auto k{kernel_type::load(&states[off])};
+
+      // Is the key present in this bucket?
+      for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const raw_pos_t pos{mask_type::next(m, off)};
+        if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
+
+        func(pos, seq);
+        if constexpr (!test_flags(flags, flags_t::duplicates)) {
+          return;
         }
       }
 
       // Empty slots mark the end of a probe sequence.
-      if (NVHM_LIKELY_(kernel_type::has_empty(kern))) break;
-      seq = probe_seq_type::step(seq, psl, bucket_mask);
+      if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
     }
-
-    return npos;
   }
 
-  template <typename It>
-  inline raw_pos_t insert_(
-    const key_type& __restrict k, psl_t& __restrict psl, It& __restrict it, const hash_t h
-  ) {
-    NVHM_ASSERT_(key_to_hash(k) == h, "Supplied key and hash do not match!");
+  template <typename Func>
+  NVHM_ALWAYS_INLINE constexpr void for_each_lru_(const Func& __restrict func) const {
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
 
-    // Grow the table if there are on average less than 2 empty spaces per segment.
-    if (NVHM_UNLIKELY_(should_grow())) {
-      size_t new_capacity{capacity()};
-      NVHM_DBG_LOG_(
-        "should grow, size/capacity:", size(), '/', new_capacity, ", should grow: ", should_grow(),
-        ", should compact: ", should_compact(), '\n'
-      );
-      if (NVHM_LIKELY_(!should_compact())) {
-        new_capacity <<= 1;
-        new_capacity <<= new_capacity < 1024 * 1024;
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+
+      for (auto m{kernel_type::mask_hash(k)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        func(max_lru);
       }
-      realloc_(new_capacity);
-      NVHM_DBG_LOG_(
-        "after grow, size/capacity:", size(), '/', capacity(), "(desired: ", new_capacity,
-        "), should grow: ", should_grow(), ", should compact: ", should_compact(), '\n'
-      );
-      NVHM_ASSERT_(!should_grow());
     }
+  }
 
+  template <typename Func>
+  NVHM_ALWAYS_INLINE constexpr void for_each_state_(const Func& __restrict func) const {
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_.get()};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      const auto k{kernel_type::load(&states[off])};
+
+      for (auto m{kernel_type::mask_hash(k)}; mask_type::has_next(m); m = mask_type::step(m)) {
+        const int_t idx{mask_type::next(m)};
+        func(kernel_type::at(k, idx));
+      }
+    }
+  }
+
+  template <typename K>
+  NVHM_ALWAYS_INLINE constexpr std::tuple<raw_pos_t, probe_seq_type, insert_op_t> insert_(K&& __restrict key, const hash_t hash) {
+    static_assert(std::is_same_v<remove_cvref_t<K>, key_type>, "K must be `key_type`!");
+    if constexpr (std::is_floating_point_v<key_type>) {
+      if (key != key) {
+        throw std::runtime_error("Provided key is not a discernable floating point value!");
+      }
+    }
+    NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    // Preemptively grow table if there is not enough reserve space left.
+    raw_pos_t end{capacity()};
+    if (NVHM_UNLIKELY_(is_full_())) {
+      end = resize_("Preemptive Grow", end << 1);
+      NVHM_ASSERT_(!is_full_());
+    }
+    
+    const state_t s{hash_to_state(hash)};
     while (true) {
-      const size_t bucket_mask{bucket_mask_};
-      state_t* const __restrict states{states_.get()};
+      const bitmask_t bucket_mask{make_aligned_mask<kernel_size>(end)};
       key_type* const __restrict keys{keys_.get()};
+      state_t* const __restrict states{states_.get()};
 
-      const state_t s{hash_to_state(h)};
-      raw_pos_t tomb_pos{npos};
+      probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+      if (num_tombstone_) {
+        // We have tombstones. And we want to consume them if possible.
+        raw_pos_t ins_pos{npos};
 
-      raw_pos_t seq{hash_to_pos<kernel_type>(h, bucket_mask)};
-      for (psl = {}; probe_seq_type::has_next(psl);) {
-        NVHM_ASSERT_(
-          psl != static_cast<psl_t>(capacity()), "The table is full. This should not happen!"
-        );
+        for (; seq.has_next(); seq += kernel_size) {
+          NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
-        const raw_pos_t off{probe_seq_type::next(seq, psl, bucket_mask)};
-        psl += kernel_type::size;
-        const auto kern{kernel_type::load(&states[off])};
+          const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+          const auto k{kernel_type::load(&states[off])};
+          
+          if constexpr (!test_flags(flags, flags_t::duplicates)) {
+            // Is the key present in this bucket?
+            for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+              const raw_pos_t pos{mask_type::next(m, off)};
+              if (NVHM_LIKELY_(keys[pos] != key)) continue;
 
-        // Is the key present in this bucket?
-        auto mask{kernel_type::mask(kern, s)};
-        for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-          const raw_pos_t pos{mask_type::next(mask, off)};
-          if (NVHM_LIKELY_(keys[pos] == k)) {
-            return pos;
-          }
-        }
-
-        // Empty slots mark the end of a probe sequence.
-        mask = kernel_type::mask_empty(kern);
-        if (NVHM_LIKELY_(mask_type::has_next(mask))) {
-          raw_pos_t pos;
-          if constexpr (minimize_psl) {
-            if (tomb_pos == npos) {
-              pos = mask_type::next(mask, off);
-            } else {
-              pos = tomb_pos;
-              --num_tombstones_;
+              return {pos, std::move(seq), insert_op_t::found};
             }
+          }
+
+          int_t state_is_empty{};
+          if (ins_pos == npos) {
+            // Remember first tombstone we encounter.
+            auto m{kernel_type::mask_tombstone(k)};
+            if (mask_type::has_next(m)) {
+              ins_pos = mask_type::next(m, off);
+              NVHM_ASSERT_(!kernel_type::has_empty(k), "Table corrupted!");
+              continue;
+            }
+
+            // Empty slot marks the end of a probe sequence. This `ins_pos` is the best ideal position.
+            m = kernel_type::mask_not_hash(k);
+            if (NVHM_UNLIKELY_(!mask_type::has_next(m))) continue;
+
+            ins_pos = mask_type::next(m, off);
+            state_is_empty = 1;
           } else {
-            pos = mask_type::next(mask, off);
+            // Empty slot marks the end of the probe sequence.
+            auto m{kernel_type::mask_empty(k)};
+            if (NVHM_UNLIKELY_(!mask_type::has_next(m))) continue;
           }
+          
+          keys[ins_pos] = std::forward<K>(key);
+          states[ins_pos] = s;
 
-          states[pos] = s;
-          keys[pos] = k;
-          ++num_used_;
-          if constexpr (!std::is_same_v<It, std::monostate>) {
-            ++it;
-          }
-          return pos;
+          // We do this after key to avoid having an inconsistent state if the key's constructor throws.
+          num_empty_ -= state_is_empty;
+          num_tombstone_ -= 1 - state_is_empty;
+          NVHM_ASSERT_(check_integrity_());
+          return {ins_pos, std::move(seq), insert_op_t::insert};
         }
+      } else {
+        // We have ensured that there are no tombstones. So, we can insert into the first available slot.
+        for (; seq.has_next(); seq += kernel_size) {
+          NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
-        // Remember location of the first tombstone.
-        if constexpr (minimize_psl) {
-          if (tomb_pos == npos) {
-            mask = kernel_type::mask_non_hash(kern);
-            if (mask_type::has_next(mask)) {
-              tomb_pos = mask_type::next(mask, off);
+          const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
+          const auto k{kernel_type::load(&states[off])};
+          
+          if constexpr (!test_flags(flags, flags_t::duplicates)) {
+            // Is the key present in this bucket?
+            for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
+              const raw_pos_t pos{mask_type::next(m, off)};
+              if (NVHM_LIKELY_(keys[pos] != key)) continue;
+
+              return {pos, std::move(seq), insert_op_t::found};
             }
           }
-        }
 
-        seq = probe_seq_type::step(seq, psl, bucket_mask);
+          // Any non-hash must be an empty slot.
+          auto m{kernel_type::mask_not_hash(k)};
+          if (NVHM_UNLIKELY_(!mask_type::has_next(m))) continue;
+
+          raw_pos_t pos{mask_type::next(m, off)};
+
+          keys[pos] = std::forward<K>(key);
+          states[pos] = s;
+          
+          --num_empty_;
+          NVHM_ASSERT_(check_integrity_());
+          return {pos, std::move(seq), insert_op_t::insert};
+        }
       }
 
       // Probe sequence limit reached. Increase table size and try again.
-      realloc_((bucket_mask + kernel_type::size) << 1);
+      if constexpr (probe_seq_type::is_bounded) {
+        end = resize_("Insert Error", end << 1);
+      } else {
+        NVHM_ASSERT_(false, "Insert error! This should not happen!");
+      }
     }
   }
 
-  void realloc_(size_t new_capacity) {
-    const size_t raw_value_size{raw_value_size_};
-    const size_t raw_value_pitch{raw_value_pitch_};
+  NVHM_ALWAYS_INLINE constexpr bool is_full_() const noexcept {
+    return conf_.should_grow_precalc(num_empty_, grow_threshold_);
+  }
 
-    const size_t old_bucket_mask{bucket_mask_};
-    const size_t old_capacity{old_bucket_mask + kernel_type::size};
-    aligned_unique_ptr<state_t[]> old_states{std::move(states_)};
-    const size_t old_size{size()};
-    aligned_unique_ptr<key_type[]> old_keys{std::move(keys_)};
-    aligned_unique_ptr<value_type[]> old_values{std::move(values_)};
-    aligned_unique_ptr<raw_value_type[]> old_raw_values{std::move(raw_values_)};
+  NVHM_ALWAYS_INLINE constexpr lru_t lru_at_([[maybe_unused]] raw_pos_t pos) const noexcept {
+    NVHM_ASSERT_(contains_at_(pos), "pos = ", pos);
+    return max_lru;
+  }
 
-    for (;; new_capacity <<= 1) {
-      __label__ on_success, on_error;
-      NVHM_ASSERT_(
-        new_capacity > size(), "old_capacity = ", old_capacity, ", new_capacity = ", new_capacity,
-        ", size() = ", size()
-      );
+  NVHM_ALWAYS_INLINE constexpr double max_load_factor_() const noexcept { return conf_.max_load_factor(); }
 
-      reset_(new_capacity);
-      const size_t bucket_mask{bucket_mask_};
-      state_t* const __restrict states{states_.get()};
-      key_type* const __restrict keys{keys_.get()};
-      value_type* const __restrict values{values_.get()};
-      raw_value_type* const __restrict raw_values{raw_values_.get()};
+  NVHM_ALWAYS_INLINE constexpr int_t num_empty_slots_() const noexcept { return num_empty_; }
+  NVHM_ALWAYS_INLINE constexpr int_t num_tombstone_slots_() const noexcept { return num_tombstone_; }
+  NVHM_ALWAYS_INLINE constexpr int_t num_not_hash_slots_() const noexcept { return num_empty_ + num_tombstone_; }
 
-      // Insert all KV-pairs into the new container.
-      for (raw_pos_t off{}; off != old_capacity; off += kernel_type::size) {
-        const auto kern{kernel_type::load(&old_states[off])};
+  NVHM_ALWAYS_INLINE constexpr void read_prefetch_states_(raw_pos_t off) const noexcept {
+    NVHM_ASSERT_(off >= 0 && off <= to_int(bucket_mask_), "off = ", off, ", bucket_mask = ", std::hex, bucket_mask_, std::dec);
+    nvhm::read_prefetch<kernel_size>(&states_[to_uint(off)]);
+  }
 
-        auto mask{kernel_type::mask_hash(kern)};
-        for (; mask_type::has_next(mask); mask = mask_type::step(mask)) {
-          const raw_pos_t old_pos{mask_type::next(mask, off)};
-          const key_type& __restrict k{old_keys[old_pos]};
+  NVHM_ALWAYS_INLINE constexpr raw_pos_t reset_() noexcept {
+    const raw_pos_t end{capacity()};
 
-          const hash_t h{key_to_hash(k)};
+    std::fill_n(states_.get(), end, kernel_type::empty);
+    num_empty_ = end;
+    num_tombstone_ = 0;
+    NVHM_ASSERT_(check_integrity_());
 
-          raw_pos_t seq{hash_to_pos<kernel_type>(h, bucket_mask)};
-          for (psl_t psl{}; probe_seq_type::has_next(psl);) {
-            NVHM_ASSERT_(
-              psl != static_cast<psl_t>(capacity()), "The table is full. This should not happen!"
-            );
+    return end;
+  }
 
-            const raw_pos_t off{probe_seq_type::next(seq, psl, bucket_mask)};
-            psl += kernel_type::size;
-            const auto kern{kernel_type::load(&states[off])};
+  NVHM_ALWAYS_INLINE constexpr bool reset_slot_(raw_pos_t end, state_t& __restrict slot, const bool have_empty_neighbor) {
+    NVHM_ASSERT_(is_hash(slot));
 
-            auto mask{kernel_type::mask_non_hash(kern)};
-            for (; NVHM_LIKELY_(mask_type::has_next(mask)); mask = mask_type::step(mask)) {
-              const raw_pos_t pos{mask_type::next(mask, off)};
-              states[pos] = hash_to_state(h);
-              keys[pos] = k;
-#ifndef NDEBUG
-              ++num_used_;
-#endif
+    if (NVHM_LIKELY_(have_empty_neighbor)) {
+      slot = kernel_type::empty;
+      ++num_empty_;
+      NVHM_ASSERT_(check_integrity_());
 
-              if constexpr (has_values) {
-                values[pos] = old_values[old_pos];
+      return auto_shrink_and_scub_(end, 1, 0);
+    } else {
+      slot = kernel_type::tombstone;
+      ++num_tombstone_;
+      NVHM_ASSERT_(check_integrity_());
+
+      return auto_shrink_and_scub_(end, 0, 1);
+    }
+  }
+
+  NVHM_ALWAYS_INLINE constexpr bool auto_shrink_and_scub_(raw_pos_t end, int_t /*num_emptied*/, int_t num_burried) {
+    if constexpr (test_flags(flags, flags_t::auto_shrink)) {
+      if (NVHM_UNLIKELY_(conf_.should_shrink(end, num_empty_, num_tombstone_))) {
+        end = resize_("Auto Shrink", end >> 1);
+        return false;
+      }
+    }
+
+    if constexpr (test_flags(flags, flags_t::auto_scrub)) {
+      if (num_burried) {
+        if (NVHM_UNLIKELY_(conf_.should_scrub(end, num_tombstone_))) {
+          end = scrub_("Auto Scrub", max_lru);
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  NVHM_NO_INLINE raw_pos_t resize_(const char reason[], raw_pos_t end) {
+    if (end < conf_.min_capacity()) end = conf_.min_capacity();
+    NVHM_ASSERT_(end >= conf_.min_capacity(), "reason = ", reason, ", new_capacity = ", end, ", min_capacity = ", conf_.min_capacity());
+    NVHM_ASSERT_(has_single_bit(end), "reason = ", reason, ", new_capacity = ", end, " is not a power of two!");
+
+    const raw_pos_t old_end{capacity()};
+    const raw_pos_t old_size{old_end - num_not_hash_slots_()};
+    end = std::max(end, bit_ceil(old_size + conf_.grow_threshold(bit_ceil(old_size))));
+    if (NVHM_UNLIKELY_(end == old_end)) {
+      NVHM_LOG_(log_level_t::debug, reason, " resizing (abort): ", old_size, '/', old_end, " -> ", end, '\n');
+      return end;
+    }
+    NVHM_LOG_(log_level_t::debug, reason, " resizing (before): ", old_size, '/', old_end, " -> ", end, '\n');
+
+    const int_t blob_size{conf_.blob_size()};
+    const int_t blob_stride{conf_.blob_stride()};
+    
+    unique_ptr_t<value_type[], allocator_type> old_values_ptr{std::move(values_)};
+    unique_ptr_t<std::byte[], allocator_type> old_blobs_ptr{std::move(blobs_)};
+    unique_ptr_t<key_type[], allocator_type> old_keys_ptr{std::move(keys_)};
+    unique_ptr_t<state_t[], allocator_type> old_states_ptr{std::move(states_)};
+    const value_type* const __restrict old_values{old_values_ptr.get()};
+    const std::byte* const __restrict old_blobs{old_blobs_ptr.get()};
+    const key_type* const __restrict old_keys{old_keys_ptr.get()};
+    const state_t* const __restrict old_states{old_states_ptr.get()};
+    
+    for (;; end <<= 1) {
+      __label__ next_old_pos, resize_error;
+
+      end = alloc_(end);
+      reset_();
+
+      const bitmask_t bucket_mask{bucket_mask_};
+      value_type* const __restrict new_values{values_.get()};
+      std::byte* const __restrict new_blobs{blobs_.get()};
+      key_type* const __restrict new_keys{keys_.get()};
+      state_t* const __restrict new_states{states_.get()};
+
+      // Re-insert all KV-pairs, taking some shortcuts because no collisions are possible.
+      for (raw_pos_t old_off{}; old_off < old_end; old_off += kernel_size) {
+        const auto k_old{kernel_type::load(&old_states[old_off])};
+        
+        for (auto m_old{kernel_type::mask_hash(k_old)}; mask_type::has_next(m_old); m_old = mask_type::step(m_old)) {
+          const raw_pos_t old_pos{mask_type::next(m_old, old_off)};
+          const hash_t hash{key_to_hash(old_keys[old_pos])};
+
+          probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+          for (; seq.has_next(); seq += kernel_size) {
+            NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+
+            // TODO: Shouldn't there only be two offsets possible. Can't we exploit that?
+            const raw_pos_t new_off{align_pos(seq.next(), bucket_mask)};
+            const auto k_new{kernel_type::load(&new_states[new_off])};
+            
+            for (auto m_new{kernel_type::mask_not_hash(k_new)}; NVHM_LIKELY_(mask_type::has_next(m_new)); m_new = mask_type::step(m_new)) {
+              const raw_pos_t new_pos{mask_type::next(m_new, new_off)};
+
+              new_states[new_pos] = hash_to_state(hash);
+              if constexpr (probe_seq_type::is_bounded) {
+                new_keys[new_pos] = old_keys[old_pos];
+              } else {
+                new_keys[new_pos] = std::move(old_keys[old_pos]);
               }
-              fast_copy(
-                &raw_values[pos * raw_value_pitch], &old_raw_values[old_pos * raw_value_pitch],
-                raw_value_size
-              );
-              goto on_success;
-            }
+              if constexpr (has_values) {
+                if constexpr (probe_seq_type::is_bounded) {
+                  new_values[new_pos] = old_values[old_pos];
+                } else {
+                  new_values[new_pos] = std::move(old_values[old_pos]);
+                }
+              }
+              if constexpr (has_blobs) {
+                copy_blob(&new_blobs[new_pos * blob_stride], &old_blobs[old_pos * blob_stride], blob_size);
+              }
 
-            seq = probe_seq_type::step(seq, psl, bucket_mask);
+              goto next_old_pos;
+            }
           }
 
-          goto on_error;
-        on_success:;
+          if constexpr (probe_seq_type::is_unbounded) {
+            throw std::runtime_error("Resizing error! This should not happen!");
+          }
+          goto resize_error;
+        next_old_pos:;
         }
       }
 
       break;
-    on_error:;
+    resize_error:;
+      NVHM_LOG_(log_level_t::debug, reason, " resizing (error): ", size(), '/', capacity(), '\n');
     }
 
-    NVHM_ASSERT_(num_used_ == old_size, "num_used_ = ", num_used_, ", old_size = ", old_size);
-    num_used_ = old_size;
+    num_empty_ -= old_size;
+    NVHM_LOG_(log_level_t::debug, reason, " resizing (after): ", size(), '/', capacity(), '\n');
+    NVHM_ASSERT_(check_integrity_());
+    return end;
   }
 
-  inline void release_slot_(state_t& __restrict state, const bool reclaim) noexcept {
-    NVHM_ASSERT_(slot_is_occupied(state));
-    if (reclaim) {
-      state = kernel_type::empty;
-      --num_used_;
-    } else {
-      state = kernel_type::tombstone;
-      ++num_tombstones_;
+  NVHM_NO_INLINE int_t scrub_(const char reason[], lru_t) {
+    if (num_tombstone_ == 0) return false;
+    NVHM_LOG_(log_level_t::debug, reason, " scrubbing (before): size = ", size(), ", num_empty = ", num_empty_, ", num_tombstone = ", num_tombstone_, '\n');
+
+    const int_t blob_size{conf_.blob_size()};
+    const int_t blob_stride{conf_.blob_stride()};
+
+    const raw_pos_t end{capacity()};
+    const bitmask_t bucket_mask{make_aligned_mask<kernel_size>(end)};
+    value_type* const __restrict values{values_.get()};
+    std::byte* const __restrict blobs{blobs_.get()};
+    key_type* const __restrict keys{keys_.get()};
+    state_t* const __restrict states{states_.get()};
+
+    // Scrubbing consists of two phases.
+    // 1. Re-insert KV-pairs upstream. As we try to reinsert KV-pairs upstream, we encounter a tombstone and replace it.
+    //    -- The original location has an adjacent empty slot. Then we can reclaim that slot.
+    //    -- The original location has no adjacent empty slot. Then we just propagate the tombstone.
+    // 2. At the end, assuming that movements happend, we may be able to reclaim tombstones. This is possible because, we
+    //    are ensured that all valid KV-pairs are now in the most upstream location "permissible".
+    //    -- If all pairs are in the opitmal bucket (i.e. the PSL never exceeded 0), we can prune all tombstones.
+    //    -- Otherwise, we can still prune tombstones in buckets that consist only of tombstones.
+    int_t num_empty{num_empty_};
+    int_t num_tombstone{num_tombstone_};
+    int_t num_moves{};
+    psl_t psl_bits;
+    for (int_t phase{};; ++phase) {
+      const int_t num_moves_prev{num_moves};
+      psl_bits = 0;
+
+      for (raw_pos_t old_off{}; old_off < end; old_off += kernel_size) {
+        __label__ next_old_pos;
+
+        // Re-insert KV-pairs upstream, if they can replace a tombstone.
+        const auto old_k{kernel_type::load(&states[old_off])};
+
+        for (auto old_m{kernel_type::mask_hash(old_k)}; mask_type::has_next(old_m); old_m = mask_type::step(old_m)) {
+          const raw_pos_t old_pos{mask_type::next(old_m, old_off)};
+
+          const hash_t hash{key_to_hash(keys[old_pos])};
+
+          probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
+          for (; seq.has_next(); seq += kernel_size) {
+            NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+
+            const raw_pos_t new_off{align_pos(seq.next(), bucket_mask)};
+            if (NVHM_LIKELY_(new_off == old_off)) goto next_old_pos;  // Already in the best possible bucket.
+
+            const auto new_k{kernel_type::load(&states[new_off])};
+
+            for (auto new_m{kernel_type::mask_not_hash(new_k)}; mask_type::has_next(new_m); new_m = mask_type::step(new_m)) {
+              const raw_pos_t new_pos{mask_type::next(new_m, new_off)};
+              NVHM_ASSERT_(states[new_pos] == kernel_type::tombstone);
+
+              states[new_pos] = hash_to_state(hash);
+              keys[new_pos] = std::move(keys[old_pos]);
+              if constexpr (has_values) {
+                values[new_pos] = std::move(values[old_pos]);
+              }
+              if constexpr (has_blobs) {
+                copy_blob(&blobs[new_pos * blob_stride], &blobs[old_pos * blob_stride], blob_size);
+              }
+
+              if (kernel_type::has_empty(old_k)) {
+                states[old_pos] = kernel_type::empty;
+                ++num_empty;
+                --num_tombstone;
+              } else {
+                states[old_pos] = kernel_type::tombstone;
+              }
+              ++num_moves;
+              goto next_old_pos;
+            }
+          }
+          NVHM_ASSERT_(false, "Probe sequence has exhausted. This should not happen! (psl = ", seq.psl(), ", max_length = ", probe_seq_type::max_length, ')');
+
+        next_old_pos:;
+          psl_bits |= seq.psl();
+        }
+      }
+      NVHM_LOG_(log_level_t::debug, reason, " scrubbing (phase ", phase, "): size = ", size(), ", num_empty = ", num_empty_, " -> ", num_empty, ", num_tombstone = ", num_tombstone_, " -> ", num_tombstone, ", num_moves = ", num_moves, ", psl_bits = ", psl_bits, '\n');
+
+      // TODO: Can we avoid the final full pass?
+      if (num_moves - num_moves_prev <= 1) break;
     }
-  }
+    num_empty_ = num_empty;
+    num_tombstone_ = num_tombstone;
+    NVHM_ASSERT_(check_integrity_());
 
-  inline void reset_(const size_t capacity) {
-    NVHM_ASSERT_(capacity >= min_capacity && has_single_bit(capacity));
+    if (num_moves != 0) {
+      // If all KV-pairs were placed in the best bucket, we can convert tombstones to empty slots.
+      if (psl_bits == 0) {
+        for (raw_pos_t off{}; off < end; off += kernel_size) {
+          auto k{kernel_type::load(&states[off])};
+          k = kernel_type::not_hash_to_empty(k);
+          kernel_type::store(k, &states[off]);
+        }
+        num_empty_ += num_tombstone;
+        num_tombstone_ = 0;
+      } else {
+        // Alternatively, we can try locating and earsing dead buckets (this is only permissible if we completed all passes).
+        int_t n{};
+        for (raw_pos_t off{}; off < end; off += kernel_size) {
+          auto k{kernel_type::load(&states[off])};
+          if (kernel_type::has_not_tombstone(k)) continue;
+          
+          std::fill_n(&states[off], kernel_size, kernel_type::empty);
+          n += kernel_size;
+        }
+        num_empty_ += n;
+        num_tombstone_ -= n;
+      }
 
-    // Wrap around at capacity and align at kernel size.
-    bucket_mask_ = capacity - kernel_type::size;
-    growth_threshold_ = capacity - capacity * reserve_capacity_bias_ / min_capacity;
-
-    states_ = allocator_type::template alloc<state_t>(capacity);
-    std::fill_n(states_.get(), capacity, kernel_type::empty);
-    num_used_ = {};
-    num_tombstones_ = {};
-
-    keys_ = allocator_type::template alloc<key_type>(capacity);
-    if constexpr (has_values) {
-      values_ = allocator_type::template alloc<value_type>(capacity);
+      NVHM_ASSERT_(check_integrity_());
     }
-    raw_values_ = allocator_type::template alloc<raw_value_type>(capacity * raw_value_pitch_);
+
+    NVHM_LOG_(log_level_t::debug, reason, " scrubbing (after): size = ", size(), ", num_empty = ", num_empty_, ", num_tombstone = ", num_tombstone_, ", num_moves = ", num_moves, '\n');
+    return num_moves;
   }
 
- protected:
-  size_t raw_value_size_;
-  size_t raw_value_alignment_;
-  size_t raw_value_pitch_;
-  size_t reserve_capacity_bias_;
+  NVHM_ALWAYS_INLINE constexpr int_t shrink_target_() const noexcept {
+    const int_t num_empty{num_empty_};
+    const int_t num_tombstone{num_tombstone_};
+    const int_t size{capacity() - (num_empty + num_tombstone)};
+    const int_t min_end{std::max(bit_ceil(size), conf_.min_capacity())};
 
-  size_t bucket_mask_;
-  size_t growth_threshold_;
-  aligned_unique_ptr<state_t[]> states_;
-  size_t num_used_;
-  size_t num_tombstones_;
+    raw_pos_t end{capacity()};
+    for (; end > min_end; end >>= 1) {
+      if (!conf_.should_shrink(end, num_empty, num_tombstone)) break;
+    }
+    return end;
+  }
 
-  aligned_unique_ptr<key_type[]> keys_;
-  aligned_unique_ptr<value_type[]> values_;
-  aligned_unique_ptr<raw_value_type[]> raw_values_;
+  NVHM_ALWAYS_INLINE constexpr state_t state_at_(const raw_pos_t pos) const noexcept {
+    NVHM_ASSERT_(pos >= 0 && pos < capacity(), "pos = ", pos, ", capacity = ", capacity());
+    return states_[to_uint(pos)];
+  }
+
+  NVHM_ALWAYS_INLINE constexpr void write_prefetch_states_(raw_pos_t off) noexcept {
+    NVHM_ASSERT_(off >= 0 && off <= to_int(bucket_mask_), "off = ", off, ", bucket_mask = ", std::hex, bucket_mask_, std::dec);
+    nvhm::write_prefetch<kernel_size>(&states_[to_uint(off)]);
+  }
 };
+
+template <
+  typename Key,
+  flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
+  typename ProbeSeq = default_seq_t, typename Allocator = default_allocator_t>
+using set = map<Key, void, Flags & ~flags_t::blobs, Kernel, ProbeSeq, Allocator>;
 
 }  // namespace nvhm

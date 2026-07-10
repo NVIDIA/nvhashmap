@@ -18,3 +18,7 @@ cmake_minimum_required(VERSION 3.12)
 add_executable(coll_count coll_count.cpp)
 
 add_executable(find_psl find_psl.cpp)
+
+if (NVHM_BUILD_BENCH)
+  add_subdirectory(benchmark)
+endif()

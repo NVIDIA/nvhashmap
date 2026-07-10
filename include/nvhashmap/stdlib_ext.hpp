@@ -17,94 +17,11 @@
 
 #pragma once
 
-#include <cassert>
+#include <sys/types.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-
-namespace nvhm { namespace std_ext {
-
-template <size_t N, typename T>
-constexpr T* assume_aligned(T* p) noexcept {
-  return p;
-}
-
-constexpr int countl_zero(uint32_t x) noexcept { return __builtin_clz(x); }
-constexpr int countl_zero(uint64_t x) noexcept { return __builtin_clzl(x); }
-constexpr int countl_zero(__uint128_t x) noexcept {
-  const uint64_t x_lo{static_cast<uint64_t>(x)};
-  const uint64_t x_hi{static_cast<uint64_t>(x >> 64)};
-  return x_hi ? countl_zero(x_hi) : 64 + countl_zero(x_lo);
-}
-
-constexpr int countr_zero(uint32_t x) noexcept { return __builtin_ctz(x); }
-constexpr int countr_zero(uint64_t x) noexcept { return __builtin_ctzl(x); }
-constexpr int countr_zero(__uint128_t x) noexcept {
-  const uint64_t x_lo{static_cast<uint64_t>(x)};
-  const uint64_t x_hi{static_cast<uint64_t>(x >> 64)};
-  return x_lo ? countr_zero(x_lo) : 64 + countr_zero(x_hi);
-}
-
-constexpr int popcount(uint32_t x) noexcept { return __builtin_popcount(x); }
-constexpr int popcount(uint64_t x) noexcept { return __builtin_popcountl(x); }
-constexpr int popcount(__uint128_t x) noexcept {
-  const uint64_t x_lo{static_cast<uint64_t>(x)};
-  const uint64_t x_hi{static_cast<uint64_t>(x >> 64)};
-  return popcount(x_lo) + popcount(x_hi);
-}
-
-constexpr uint32_t rotl(uint32_t x, int n) noexcept {
-  assert(n >= 0 && n < 32);
-#if defined(__clang__)
-  return __builtin_rotateleft32(x, static_cast<uint32_t>(n));
-#else
-  return (x << n) | (x >> (32 - n));
-#endif
-}
-constexpr uint64_t rotl(uint64_t x, int n) noexcept {
-  assert(n >= 0 && n < 64);
-#if defined(__clang__)
-  return __builtin_rotateleft64(x, static_cast<uint64_t>(n));
-#else
-  return (x << n) | (x >> (64 - n));
-#endif
-}
-
-constexpr uint32_t rotr(uint32_t x, int n) noexcept {
-  assert(n >= 0 && n < 32);
-#if defined(__clang__)
-  return __builtin_rotateright32(x, static_cast<uint32_t>(n));
-#else
-  return (x >> n) | (x << (32 - n));
-#endif
-}
-constexpr uint64_t rotr(uint64_t x, int n) noexcept {
-  assert(n >= 0 && n < 64);
-#if defined(__clang__)
-  return __builtin_rotateright64(x, static_cast<uint64_t>(n));
-#else
-  return (x >> n) | (x << (64 - n));
-#endif
-}
-
-constexpr uint32_t bit_ceil(uint32_t x) noexcept {
-  if (!x) x = 1;
-  uint32_t y{UINT32_C(0x8000'0000)};
-  y >>= countl_zero(x);
-  y = rotl(y, y < x);
-  return y;
-}
-constexpr uint64_t bit_ceil(uint64_t x) noexcept {
-  if (!x) x = 1;
-  uint64_t y{UINT64_C(0x8000'0000'0000'0000)};
-  y >>= countl_zero(x);
-  y = rotl(y, y < x);
-  return y;
-}
-
-constexpr bool has_single_bit(uint32_t x) noexcept { return x && !(x & (x - 1)); }
-constexpr bool has_single_bit(uint64_t x) noexcept { return x && !(x & (x - 1)); }
-
-}}  // namespace nvhm::std_ext
+#include <type_traits>
 
 #if defined(__cpp_lib_assume_aligned)
 #include <memory>
@@ -114,34 +31,510 @@ constexpr bool has_single_bit(uint64_t x) noexcept { return x && !(x & (x - 1));
 #include <bit>
 #endif
 
+#if defined(__BMI__) || defined(__POPCNT__) || defined(__LZCNT__)
+#include <x86intrin.h>
+#endif
+
+namespace nvhm { 
+
+template<typename T>
+constexpr bool is_unsigned_v{std::is_unsigned_v<T> || std::is_same_v<T, __uint128_t>};
+
+#if defined(__cpp_lib_remove_cvref)
+using std::remove_cvref;
+using std::remove_cvref_t;
+#else
+template <typename T>
+struct remove_cvref {
+  using type = std::remove_cv_t<std::remove_reference_t<T>>;
+};
+template <typename T>
+using remove_cvref_t = typename remove_cvref<T>::type;
+#endif
+
+
+template <typename T, typename U>
+constexpr T broadcast(const U x) noexcept {
+  static_assert(is_unsigned_v<T> && is_unsigned_v<U>);
+  static_assert(sizeof(T) >= sizeof(U) && sizeof(T) % sizeof(U) == 0);
+
+  T y{x};
+  for (size_t i{sizeof(U)}; i < sizeof(T); i *= 2) {
+    y |= y << (i * 8);
+  }
+  return y;
+}
+
+constexpr uint64_t low_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x); }
+constexpr uint64_t high_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x >> 64); }
+
+namespace std_ext {
+
+template <size_t N, typename T>
+constexpr T* assume_aligned(T* p) noexcept {
+  static_assert(N >= alignof(T) && N % alignof(T) == 0);
+
+#if defined(__GNUC__) || defined(__clang__)
+#if __has_builtin(__builtin_assume_aligned)
+  return static_cast<T*>(__builtin_assume_aligned(p, N));
+#endif
+#endif
+
+  return p;
+}
+
+template <class T, class... Args>
+constexpr T* construct_at(T* ptr, Args&&... args) {
+  if constexpr (std::is_array_v<T>) {
+    return ::new (static_cast<void*>(ptr)) T[1]();
+  } else {
+    return ::new (static_cast<void*>(ptr)) T(std::forward<Args>(args)...);
+  }
+}
+
+template<typename T>
+constexpr int popcount_fallback(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+  static_assert(sizeof(T) <= 16, "Top byte summing trick only works for types up to 16 bytes!");
+
+  constexpr T b01{broadcast<T, uint8_t>(0x55)};
+  constexpr T b0011{broadcast<T, uint8_t>(0x33)};
+  constexpr T b00001111{broadcast<T, uint8_t>(0x0f)};
+
+  x -= (x >> 1) & b01;  // 2-bit sums
+  x = (x & b0011) + ((x >> 2) & b0011);  // 4-bit sums
+  x = (x + (x >> 4)) & b00001111;  // 8-bit sums
+
+  // Sum up in top byte.
+  constexpr int n{sizeof(T) * 8};
+  x *= broadcast<T, uint8_t>(0x01);
+  x >>= (n - 8);
+  return static_cast<int>(x);
+}
+
+template <typename T>
+constexpr int popcount(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+#if defined(__POPCNT__)
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    return _mm_popcnt_u32(x);
+  }
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return static_cast<int>(_mm_popcnt_u64(x));
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return popcount(lo) + popcount(hi);
+  }
+
+#elif defined(__GNUC__) || defined(__clang__)
+#if __has_builtin(__builtin_popcountg)
+  return __builtin_popcountg(x);
+#endif
+
+#if __has_builtin(__builtin_popcount)
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    return __builtin_popcount(x);
+  }
+#endif
+
+#if __has_builtin(__builtin_popcountll)
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return __builtin_popcountll(x);
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return popcount(lo) + popcount(hi);
+  }
+#endif
+
+#endif
+
+  return popcount_fallback(x);
+}
+
+template <typename T>
+constexpr int countl_zero_fallback(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  // Smear highest bit down.
+  constexpr int n{sizeof(T) * 8};
+  for (int i{1}; i < n; i *= 2) {
+    x |= x >> i;
+  }
+  return n - popcount_fallback(x);
+}
+
+template <typename T>
+constexpr int countl_zero(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+  constexpr int n{sizeof(T) * 8};
+
+#if defined(__LZCNT__)
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    constexpr int n32{sizeof(uint32_t) * 8};
+    return static_cast<int>(_lzcnt_u32(x)) - (n32 - n);
+  }
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return static_cast<int>(_lzcnt_u64(x));
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return hi ? countl_zero(hi) : 64 + countl_zero(lo);
+  }
+
+#elif defined(__GNUC__) || defined(__clang__)
+
+#if __has_builtin(__builtin_clzg)
+  return __builtin_clzg(x, n);
+#endif
+
+#if __has_builtin(__builtin_clz)
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    constexpr int n32{sizeof(uint32_t) * 8};
+    return x ? __builtin_clz(x) - (n32 - n) : n;
+  }
+#endif
+
+#if __has_builtin(__builtin_clzll)  
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return x ? __builtin_clzll(x) : n;
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return hi ? countl_zero(hi) : 64 + countl_zero(lo);
+  }
+#endif
+#endif
+
+  return countl_zero_fallback(x);
+}
+
+template <typename T>
+constexpr int countr_zero_fallback(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  int z{x != 0};
+  x = z ? x ^ (x - 1) : broadcast<T, uint8_t>(0xff);
+  return popcount_fallback(x) - z;
+}
+
+template <typename T>
+constexpr int countr_zero(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+  constexpr int n{sizeof(T) * 8};
+
+#if defined(__BMI__)
+  if constexpr (sizeof(T) <= sizeof(uint16_t)) {
+    return static_cast<int>(_tzcnt_u32(x | (UINT32_C(1) << n)));
+  }
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    return static_cast<int>(_tzcnt_u32(x));
+  }
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return static_cast<int>(_tzcnt_u64(x));
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return lo ? countr_zero(lo) : 64 + countr_zero(hi);
+  }
+
+#elif defined(__GNUC__) || defined(__clang__)
+#if __has_builtin(__builtin_ctzg)
+  return __builtin_ctzg(x, n);
+#endif
+
+#if __has_builtin(__builtin_ctz)
+  if constexpr (sizeof(T) <= sizeof(uint16_t)) {
+    return __builtin_ctz(x | (UINT32_C(1) << n));
+  }
+#endif
+
+#if __has_builtin(__builtin_ctzll)
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    return __builtin_ctzll(x | (UINT64_C(1) << n));
+  }
+  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
+    return x ? __builtin_ctzll(x) : n;
+  }
+  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
+    uint64_t lo{low_bits(x)};
+    uint64_t hi{high_bits(x)};
+    return lo ? countr_zero(lo) : 64 + countr_zero(hi);
+  }
+#endif
+#endif
+
+  return countr_zero_fallback(x);
+}
+
+template <typename T>
+constexpr T rotl_fallback(T x, int s) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  constexpr int n{sizeof(T) * 8};
+  const auto y{(x << (s & (n - 1))) | (x >> (-s & (n - 1)))};
+
+  if constexpr (sizeof(T) < sizeof(uint32_t)) {
+    return static_cast<T>(y);
+  } else {
+    return y;
+  }
+}
+
+template <typename T>
+constexpr T rotl(T x, int s) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+#if defined(__GNUC__) || defined(__clang__)
+#if __has_builtin(__builtin_rotateleft8)
+  if constexpr (sizeof(T) == sizeof(uint8_t)) {
+    return __builtin_rotateleft8(x, static_cast<uint8_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateleft16)
+  if constexpr (sizeof(T) == sizeof(uint16_t)) {
+    return __builtin_rotateleft16(x, static_cast<uint16_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateleft32)
+  if constexpr (sizeof(T) == sizeof(uint32_t)) {
+    return __builtin_rotateleft32(x, static_cast<uint32_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateleft64)
+  if constexpr (sizeof(T) == sizeof(uint64_t)) {
+    return __builtin_rotateleft64(x, static_cast<uint64_t>(s));
+  }
+#endif
+#endif
+
+  return rotl_fallback(x, s);
+}
+
+template <typename T>
+constexpr T rotr_fallback(T x, int s) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  constexpr int n{sizeof(T) * 8};
+  const auto y{(x >> (s & (n - 1))) | (x << (-s & (n - 1)))};
+
+  if constexpr (sizeof(T) < sizeof(uint32_t)) {
+    return static_cast<T>(y);
+  } else {
+    return y;
+  }
+}
+
+template <typename T>
+constexpr T rotr(T x, int s) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+#if defined(__GNUC__) || defined(__clang__)
+#if __has_builtin(__builtin_rotateright8)
+  if constexpr (sizeof(T) == sizeof(uint8_t)) {
+    return __builtin_rotateright8(x, static_cast<uint8_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateright16)
+  if constexpr (sizeof(T) == sizeof(uint16_t)) {
+    return __builtin_rotateright16(x, static_cast<uint16_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateright32)
+  if constexpr (sizeof(T) == sizeof(uint32_t)) {
+    return __builtin_rotateright32(x, static_cast<uint32_t>(s));
+  }
+#endif
+
+#if __has_builtin(__builtin_rotateright64)
+  if constexpr (sizeof(T) == sizeof(uint64_t)) {
+    return __builtin_rotateright64(x, static_cast<uint64_t>(s));
+  }
+#endif
+#endif
+
+  return rotr_fallback(x, s);
+}
+
+template <typename T>
+constexpr T bit_ceil_fallback(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  // Annoying, but makes it compatible with std::bit_ceil.
+  if (x == 0) return 1;
+
+  // Shuffle down highest bit after substract 1. Then add 1 back to flip the `next` bit.
+  --x;
+  constexpr int n{sizeof(T) * 8};
+  for (int i{1}; i < n; i *= 2) {
+    x |= x >> i;
+  }
+  ++x;
+
+  return x;
+}
+
+template <typename T>
+constexpr T bit_ceil(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+#if defined(__clang__) && defined(__x86_64__)
+  // TODO: Figure out why this breaks test_basics.cpp for __uint128_t on clang, but only with x86_64.
+  if constexpr (sizeof(T) >= sizeof(__uint128_t)) {
+    return bit_ceil_fallback(x);
+  }
+#endif
+  // Annoying, but makes it compatible with std::bit_ceil.
+  if (x == 0) return 1;
+
+  int n{sizeof(T) * 8};
+  int s{countl_zero(--x)};
+
+  x = s != 0;
+  x <<= n - s;
+
+  return x;
+}
+
+template <typename T>
+constexpr bool has_single_bit_fallback(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+  return (x != 0) & !(x & (x - 1));
+}
+
+template <typename T>
+constexpr bool has_single_bit(T x) noexcept {
+  static_assert(is_unsigned_v<T>);
+
+#if defined(__clang__)
+  return popcount(x) == 1;
+#endif
+
+  return has_single_bit_fallback(x);
+}
+
+}}  // namespace nvhm::std_ext
+
+
 namespace nvhm {
 
+template <size_t N, typename T>
+constexpr T* assume_aligned(T* p) noexcept {
+  static_assert(N >= alignof(T) && N % alignof(T) == 0);
 #if defined(__cpp_lib_assume_aligned)
-using std::assume_aligned;
+  return std::assume_aligned<N>(p);
 #else
-using std_ext::assume_aligned;
+  return std_ext::assume_aligned<N>(p);
+#endif
+}
+
+#if defined(__cpp_lib_construct_at)
+using std::construct_at;
+#else
+using std_ext::construct_at;
 #endif
 
+template <typename T>
+constexpr int countl_zero(T x) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return countl_zero(static_cast<std::make_unsigned_t<T>>(x));
 #if defined(__cpp_lib_bitops)
-using std::countl_zero;
-using std::countr_zero;
-using std::popcount;
-using std::rotl;
-using std::rotr;
-#else
-using std_ext::countl_zero;
-using std_ext::countr_zero;
-using std_ext::popcount;
-using std_ext::rotl;
-using std_ext::rotr;
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::countl_zero(x);
 #endif
+  } else {
+    return std_ext::countl_zero(x);
+  }
+}
 
-#if defined(__cpp_lib_int_pow2)
-using std::bit_ceil;
-using std::has_single_bit;
-#else
-using std_ext::bit_ceil;
-using std_ext::has_single_bit;
+template <typename T>
+constexpr int countr_zero(T x) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return countr_zero(static_cast<std::make_unsigned_t<T>>(x));
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::countr_zero(x);
 #endif
+  } else {
+    return std_ext::countr_zero(x);
+  }
+}
+
+template <typename T>
+constexpr int popcount(T x) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return popcount(static_cast<std::make_unsigned_t<T>>(x));
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::popcount(x);
+#endif
+  } else {
+    return std_ext::popcount(x);
+  }
+}
+
+template <typename T>
+constexpr T rotl(T x, int s) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return rotl(static_cast<std::make_unsigned_t<T>>(x), s);
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::rotl(x, s);
+#endif
+  } else {
+    return std_ext::rotl(x, s);
+  }
+}
+
+template <typename T>
+constexpr T rotr(T x, int s) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return rotr(static_cast<std::make_unsigned_t<T>>(x), s);
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::rotr(x, s);
+#endif
+  } else {
+    return std_ext::rotr(x, s);
+  }
+}
+
+template <typename T>
+constexpr T bit_ceil(T x) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return static_cast<T>(bit_ceil(static_cast<std::make_unsigned_t<T>>(x)));
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::bit_ceil(x);
+#endif
+  } else {
+    return std_ext::bit_ceil(x);
+  }
+}
+
+template <typename T>
+constexpr bool has_single_bit(T x) noexcept {
+  if constexpr (std::is_signed_v<T>) {
+    return has_single_bit(static_cast<std::make_unsigned_t<T>>(x));
+#if defined(__cpp_lib_bitops)
+  } else if constexpr (std::is_unsigned_v<T>) {
+    return std::has_single_bit(x);
+#endif
+  } else {
+    return std_ext::has_single_bit(x);
+  }
+}
 
 }  // namespace nvhm

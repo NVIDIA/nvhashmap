@@ -15,8 +15,8 @@
 
 cmake_minimum_required(VERSION 3.15)
 
-#set(CMAKE_C_COMPILER clang-20)
-#set(CMAKE_CXX_COMPILER clang++-20)
+#set(CMAKE_C_COMPILER clang-21)
+#set(CMAKE_CXX_COMPILER clang++-21)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,13 +27,12 @@ project(nvhashmap LANGUAGES CXX)
 option(NVHM_BUILD_TESTS "Build the tests" ON)
 option(NVHM_BUILD_BENCH "Build the benchmark" ON)
 option(NVHM_BUILD_TOOLS "Build the tools" ON)
-add_subdirectory(third_party)
 
 # Default to release build.
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
-message(STATUS "Build mode: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Build flags: ${CMAKE_BUILD_TYPE}")
 
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
   set(NVHM_TARGET "-print-target-triple")
@@ -56,9 +55,6 @@ if("${CMAKE_CXX_FLAGS}" STREQUAL "")
 else()
   message(STATUS "CMAKE_CXX_FLAGS provided as '${CMAKE_CXX_FLAGS}'. Disabling custom settings.")
 endif()
-
-# Enable warnings.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion")
 
 # Determine system cache line size.
 if (${CMAKE_HOST_UNIX})
@@ -167,6 +163,13 @@ check_cxx_source_compiles("
   #endif" NVHM_HAVE_SSE4_1
 )
 check_cxx_source_compiles("
+  #if __AVX__
+  int main() { return 0; }
+  #else
+  #error AVX is not available!
+  #endif" NVHM_HAVE_AVX
+)
+check_cxx_source_compiles("
   #if __AVX2__
   int main() { return 0; }
   #else
@@ -215,26 +218,37 @@ check_cxx_source_compiles("
   #error SVE is not available!
   #endif" NVHM_HAVE_SVE
 )
+check_cxx_source_compiles("
+  #if __ARM_FEATURE_SVE2
+  int main() { return 0; }
+  #else
+  #error SVE2 is not available!
+  #endif" NVHM_HAVE_SVE2
+)
 if(${NVHM_HAVE_SVE})
-  set(NVHM_SVE_SIZE_TOOL "${CMAKE_BINARY_DIR}/third_party/sve_num_bits")
+  set(NVHM_SVE_SIZE_TOOL "${CMAKE_BINARY_DIR}/sve_num_bits")
   if(NOT EXISTS ${NVHM_SVE_SIZE_TOOL})
+    message(STATUS "Building SVE size tool...")
     execute_process(
       COMMAND echo -e "
       #include <stdio.h>
       #include <arm_sve.h>
-      int main() { printf(\"%lu\", svcntb() * 8); return 0; }"
+      int main() { printf(\"%lu\", svcntb()); return 0; }"
       COMMAND ${CMAKE_CXX_COMPILER} -march=native -o ${NVHM_SVE_SIZE_TOOL} -xc -
       COMMAND_ERROR_IS_FATAL ANY
     )
   endif()
   execute_process(
     COMMAND "${NVHM_SVE_SIZE_TOOL}"
-    OUTPUT_VARIABLE NVHM_HAVE_SVE_MAX_BITS
+    OUTPUT_VARIABLE NVHM_HAVE_SVE_SIZE
     COMMAND_ERROR_IS_FATAL ANY
   )
-  message(STATUS "Detected SVE register size: ${NVHM_HAVE_SVE_MAX_BITS}")
+  message(STATUS "Detected SVE register size: ${NVHM_HAVE_SVE_SIZE}")
+  if(("${NVHM_HAVE_SVE_SIZE}" STREQUAL "0") OR ("${NVHM_HAVE_SVE_SIZE}" STREQUAL ""))
+    set(NVHM_HAVE_SVE_SIZE "128")
+  endif()
 else()
-  set(NVHM_HAVE_SVE_MAX_BITS "0")
+  set(NVHM_HAVE_SVE_SIZE "128")
 endif()
 set(CMAKE_REQUIRED_FLAGS "")
 
@@ -254,11 +268,12 @@ message(STATUS "NVHM_HAVE_AVX512_VL             = ${NVHM_HAVE_AVX512_VL}"       
 message(STATUS "NVHM_HAVE_AVX512_VBMI           = ${NVHM_HAVE_AVX512_VBMI}"          )
 message(STATUS "NVHM_HAVE_NEON                  = ${NVHM_HAVE_NEON}"                 )
 message(STATUS "NVHM_HAVE_SVE                   = ${NVHM_HAVE_SVE}"                  )
-message(STATUS "NVHM_HAVE_SVE_MAX_BITS          = ${NVHM_HAVE_SVE_MAX_BITS}"         )
+message(STATUS "NVHM_HAVE_SVE_SIZE              = ${NVHM_HAVE_SVE_SIZE}"             )
+message(STATUS "NVHM_HAVE_SVE2                  = ${NVHM_HAVE_SVE2}"                 )
 
 option(NVHM_WANT_ALL "Enable all features" OFF)
 if(${NVHM_WANT_ALL})
-  set(NVHM_HAVE_HUGEPAGES ON)
+  set(NVHM_HAVE_TRANSPARENT_HUGEPAGES ON)
   set(NVHM_HAVE_SSE ON)
   set(NVHM_HAVE_SSE2 ON)
   set(NVHM_HAVE_SSSE3 ON)
@@ -270,13 +285,20 @@ if(${NVHM_WANT_ALL})
   set(NVHM_HAVE_AVX512_VBMI ON)
   set(NVHM_HAVE_NEON ON)
   set(NVHM_HAVE_SVE ON)
+  set(NVHM_HAVE_SVE2 ON)
 endif()
 
 set(NVHM_WANT_CACHE_LINE_SIZE "${NVHM_HAVE_CACHE_LINE_SIZE}" CACHE STRING "Cache line size")
 set(NVHM_WANT_PAGE_SIZE "${NVHM_HAVE_PAGE_SIZE}" CACHE STRING "Page size")
 set(NVHM_WANT_HUGEPAGE_SIZE "${NVHM_HAVE_HUGEPAGE_SIZE}" CACHE STRING "Desired hugepage size")
-option(NVHM_WANT_HUGEPAGES "Enable hugepages" "${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
-option(NVHM_WANT_TRANSPARENT_HUGEPAGES "Prefer using transparent hugepages" "${NVHM_WANT_HUGEPAGES}")
+
+option(NVHM_WANT_PAGE_ALIGNMENT "Enable using page aligned allocations by default" ON)
+if((${NVHM_HAVE_NUM_HUGEPAGES} GREATER 0) OR (${NVHM_HAVE_TRANSPARENT_HUGEPAGES}))
+  option(NVHM_WANT_HUGEPAGES "Enable using hugepages by default" ON )
+else()
+  option(NVHM_WANT_HUGEPAGES "Enable using hugepages by default" OFF)
+endif()
+option(NVHM_WANT_TRANSPARENT_HUGEPAGES "Prefer using transparent hugepages" "${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
 
 if((${NVHM_HAVE_SSE}) OR (${NVHM_HAVE_SSE2}) OR (${NVHM_HAVE_SSSE3}) OR (${NVHM_HAVE_SSE4_1}))
   option(NVHM_WANT_SSE          "Enable SSE"          ON )
@@ -284,31 +306,47 @@ else()
   option(NVHM_WANT_SSE          "Enable SSE"          OFF)
 endif()
 
-option(NVHM_WANT_SSE_PREFETCH "Enable SSE prefetch" ${NVHM_WANT_SSE}   )
+option(NVHM_WANT_SSE_PREFETCH "Enable SSE prefetch" ${NVHM_WANT_SSE})
 
-if(${NVHM_HAVE_SSE} AND ${NVHM_HAVE_SSE2})
+if(((${NVHM_HAVE_SSE}) AND (${NVHM_HAVE_SSE2})) OR (${NVHM_HAVE_SSSE3}) OR (${NVHM_HAVE_SSE4_1}))
   option(NVHM_WANT_SSE2         "Enable SSE2"         ON )
 else()
   option(NVHM_WANT_SSE2         "Enable SSE2"         OFF)
 endif()
 
-option(NVHM_WANT_SSE3         "Enable SSSE3"        ${NVHM_HAVE_SSSE3} )
-option(NVHM_WANT_SSE4         "Enable SSE4.1"       ${NVHM_HAVE_SSE4_1})
-option(NVHM_WANT_AVX2         "Enable AVX2"         ${NVHM_HAVE_AVX2}  )
+if(((${NVHM_HAVE_SSE}) AND (${NVHM_HAVE_SSE2}) AND (${NVHM_HAVE_SSSE3})) OR (${NVHM_HAVE_SSE4_1}))
+  option(NVHM_WANT_SSE3         "Enable SSSE3"        ON )
+else()
+  option(NVHM_WANT_SSE3         "Enable SSSE3"        OFF)
+endif()
 
-if(${NVHM_HAVE_AVX512_F} AND ${NVHM_HAVE_AVX512_BW})
+if((${NVHM_HAVE_SSE}) AND (${NVHM_HAVE_SSE2}) AND (${NVHM_HAVE_SSSE3}) AND (${NVHM_HAVE_SSE4_1}))
+  option(NVHM_WANT_SSE4         "Enable SSE4.1"       ON )
+else()
+  option(NVHM_WANT_SSE4         "Enable SSE4.1"       OFF)
+endif()
+
+option(NVHM_WANT_AVX          "Enable AVX"          ${NVHM_HAVE_AVX})
+
+if((${NVHM_HAVE_AVX}) AND (${NVHM_HAVE_AVX2}))
+option(NVHM_WANT_AVX2         "Enable AVX2"           ON )
+else()
+option(NVHM_WANT_AVX2         "Enable AVX2"           OFF)
+endif()
+
+if((${NVHM_HAVE_AVX512_F}) AND (${NVHM_HAVE_AVX512_BW}))
   option(NVHM_WANT_AVX512       "Enable AVX512"       ON )
 else()
   option(NVHM_WANT_AVX512       "Enable AVX512"       OFF)
 endif()
 
-if(${NVHM_HAVE_AVX512_F} AND ${NVHM_HAVE_AVX512_VL})
+if((${NVHM_HAVE_AVX512_F}) AND (${NVHM_HAVE_AVX512_VL}))
   option(NVHM_WANT_AVX_FVL      "Enable AVX FVL"      ON )
 else()
   option(NVHM_WANT_AVX_FVL      "Enable AVX FVL"      OFF)
 endif()
 
-if(${NVHM_HAVE_AVX512_BW} AND ${NVHM_HAVE_AVX512_VL})
+if((${NVHM_HAVE_AVX512_BW}) AND (${NVHM_HAVE_AVX512_VL}))
   option(NVHM_WANT_AVX_BWVL     "Enable AVX BWVL"     ON )
 else()
   option(NVHM_WANT_AVX_BWVL     "Enable AVX BWVL"     OFF)
@@ -317,20 +355,22 @@ endif()
 option(NVHM_WANT_AVX_VBMI     "Enable AVX VBMI"     ${NVHM_HAVE_AVX512_VBMI})
 option(NVHM_WANT_NEON         "Enable NEON"         ${NVHM_HAVE_NEON}       )
 
-if("${NVHM_HAVE_SVE_MAX_BITS}" STREQUAL "0")
-  set(NVHM_HAVE_SVE_MAX_BITS "128")
-endif()
-set(NVHM_WANT_SVE_MAX_BITS "${NVHM_HAVE_SVE_MAX_BITS}" CACHE STRING "Enable SVE number of bits")
-if((${NVHM_HAVE_SVE}) AND NOT ("${NVHM_WANT_SVE_MAX_BITS}" STREQUAL "0"))
+set(NVHM_WANT_SVE_SIZE "${NVHM_HAVE_SVE_SIZE}" CACHE STRING "Enable SVE for sizes up to this value (in bytes)")
+if((${NVHM_HAVE_SVE}) AND NOT ("${NVHM_WANT_SVE_SIZE}" STREQUAL "0"))
   option(NVHM_WANT_SVE          "Enable SVE"          ON )
 else()
   option(NVHM_WANT_SVE          "Enable SVE"          OFF)
 endif()
+if((${NVHM_HAVE_SVE}) AND (${NVHM_HAVE_SVE2}) AND NOT ("${NVHM_WANT_SVE_SIZE}" STREQUAL "0"))
+  option(NVHM_WANT_SVE2         "Enable SVE2"         ON )
+else()
+  option(NVHM_WANT_SVE2         "Enable SVE2"         OFF)
+endif()
 
 if(${NVHM_WANT_SVE})
-  option(NVHM_WANT_SVE_OVER_NEON "Prefer SVE over NEON" ON )
+  option(NVHM_WANT_SVE_COPY "Use SVE copy function by instead of memcpy for blobs" ON )
 else()
-  option(NVHM_WANT_SVE_OVER_NEON "Prefer SVE over NEON" OFF)
+  option(NVHM_WANT_SVE_COPY "Use SVE copy function by instead of memcpy for blobs" OFF)
 endif()
 
 set(NVHM_WANT_PREFETCH_CACHE_LEVEL "2" CACHE STRING "Cache level to aim for when issuing prefetches")
@@ -339,6 +379,7 @@ option(NVHM_WANT_RANGE_PREFETCH "Use scoped SVE prefetches (experimental feature
 
 message(STATUS "NVHM_WANT_CACHE_LINE_SIZE       = ${NVHM_WANT_CACHE_LINE_SIZE}"      )
 message(STATUS "NVHM_WANT_PAGE_SIZE             = ${NVHM_WANT_PAGE_SIZE}"            )
+message(STATUS "NVHM_WANT_PAGE_ALIGNMENT        = ${NVHM_WANT_PAGE_ALIGNMENT}"       )
 message(STATUS "NVHM_WANT_HUGEPAGE_SIZE         = ${NVHM_WANT_HUGEPAGE_SIZE}"        )
 message(STATUS "NVHM_WANT_HUGEPAGES             = ${NVHM_WANT_HUGEPAGES}"            )
 message(STATUS "NVHM_WANT_TRANSPARENT_HUGEPAGES = ${NVHM_WANT_TRANSPARENT_HUGEPAGES}")
@@ -354,8 +395,9 @@ message(STATUS "NVHM_WANT_AVX_BWVL              = ${NVHM_WANT_AVX_BWVL}"        
 message(STATUS "NVHM_WANT_AVX_VBMI              = ${NVHM_WANT_AVX_VBMI}"             )
 message(STATUS "NVHM_WANT_NEON                  = ${NVHM_WANT_NEON}"                 )
 message(STATUS "NVHM_WANT_SVE                   = ${NVHM_WANT_SVE}"                  )
-message(STATUS "NVHM_WANT_SVE_MAX_BITS          = ${NVHM_WANT_SVE_MAX_BITS}"         )
-message(STATUS "NVHM_WANT_SVE_OVER_NEON         = ${NVHM_WANT_SVE_OVER_NEON}"        )
+message(STATUS "NVHM_WANT_SVE_SIZE              = ${NVHM_WANT_SVE_SIZE}"             )
+message(STATUS "NVHM_WANT_SVE2                  = ${NVHM_WANT_SVE2}"                 )
+message(STATUS "NVHM_WANT_SVE_COPY              = ${NVHM_WANT_SVE_COPY}"             )
 message(STATUS "NVHM_WANT_RANGE_PREFETCH        = ${NVHM_WANT_RANGE_PREFETCH}"       )
 
 if ("${NVHM_TARGET}" STREQUAL "x86_64")
@@ -370,6 +412,9 @@ if ("${NVHM_TARGET}" STREQUAL "x86_64")
   endif()
   if(${NVHM_WANT_SSE4})
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4.1")
+  endif()
+  if(${NVHM_WANT_AVX})
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
   endif()
   if(${NVHM_WANT_AVX2})
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
@@ -394,6 +439,9 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
     if(${NVHM_WANT_SVE})
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xclang -target-feature -Xclang +sve")
     endif()
+    if(${NVHM_WANT_SVE2})
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xclang -target-feature -Xclang +sve2")
+    endif()
   else()
     string(REGEX MATCH "-march=([^ \t\r\n]*)" NVHM_MARCH "${CMAKE_CXX_FLAGS}")
     set(NVHM_MARCH_OLD "${NVHM_MARCH}")
@@ -410,32 +458,40 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
     endif()
     message(STATUS "AARCH64 major version: ${NVHM_AARCH_MAJOR}")
 
-    set(NVHM_IMPLICT_NEON OFF)
-    if("${NVHM_AARCH_MAJOR}" STRGREATER "7")
-      set(NVHM_IMPLICT_NEON ON)
-    elseif("${NVHM_MARCH}" MATCHES "\\+simd")
-      set(NVHM_IMPLICT_NEON ON)
-    endif()
-
-    set(NVHM_IMPLICT_SVE OFF)
-    if("${NVHM_AARCH_MAJOR}" STRGREATER "8")
-      set(NVHM_IMPLICT_SVE ON)
-    elseif("${NVHM_MARCH}" MATCHES "\\+sve")
-      set(NVHM_IMPLICT_SVE ON)
-    endif()
-
-    unset(NVHM_AARCH_MAJOR)
-
     # https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html#aarch64-feature-modifiers
+    set(NVHM_IMPLICT OFF)
+    if("${NVHM_AARCH_MAJOR}" STRGREATER "7")
+      set(NVHM_IMPLICT ON)
+    elseif("${NVHM_MARCH}" MATCHES "\\+simd")
+      set(NVHM_IMPLICT ON)
+    endif()
     set(NVHM_MARCH "-march=${NVHM_MARCH}")
-    if((${NVHM_WANT_NEON}) AND NOT (${NVHM_IMPLICT_NEON}))
+    if((${NVHM_WANT_NEON}) AND NOT (${NVHM_IMPLICT}))
       set(NVHM_MARCH "${NVHM_MARCH}+simd")
     endif()
-    if((${NVHM_WANT_SVE}) AND NOT (${NVHM_IMPLICT_SVE}))
+    unset(NVHM_IMPLICT)
+
+    set(NVHM_IMPLICT OFF)
+    if("${NVHM_AARCH_MAJOR}" STRGREATER "8")
+      set(NVHM_IMPLICT ON)
+    elseif("${NVHM_MARCH}" MATCHES "\\+sve")
+      set(NVHM_IMPLICT ON)
+    endif()
+    if((${NVHM_WANT_SVE}) AND NOT (${NVHM_IMPLICT}))
       set(NVHM_MARCH "${NVHM_MARCH}+sve")
     endif()
-    unset(NVHM_IMPLICT_NEON)
-    unset(NVHM_IMPLICT_SVE)
+    unset(NVHM_IMPLICT)
+
+    set(NVHM_IMPLICT OFF)
+    if("${NVHM_AARCH_MAJOR}" STRGREATER "8")
+      set(NVHM_IMPLICT ON)
+    elseif("${NVHM_MARCH}" MATCHES "\\+sve2")
+      set(NVHM_IMPLICT ON)
+    endif()
+    if((${NVHM_WANT_SVE2}) AND NOT (${NVHM_IMPLICT}))
+      set(NVHM_MARCH "${NVHM_MARCH}+sve2")
+    endif()
+    unset(NVHM_IMPLICT)
 
     #message(STATUS "NVHM_MARCH: ${NVHM_MARCH_OLD} => ${NVHM_MARCH}")
     #message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
@@ -449,11 +505,12 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
     unset(NVHM_MARCH_OLD)
   endif()
   if(${NVHM_WANT_SVE})
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msve-vector-bits=${NVHM_WANT_SVE_MAX_BITS}")
+    math(EXPR NVHM_WANT_SVE_NUM_BITS "${NVHM_WANT_SVE_SIZE} * 8")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msve-vector-bits=${NVHM_WANT_SVE_NUM_BITS}")
+    unset(NVHM_WANT_SVE_NUM_BITS)
   endif()
 endif()
 
-option(NVHM_ALLOW_FALSE_POSITIVE_MATCHES "Allows false positives in masks" ON)
 option(NVHM_ALLOW_FAST_LRU_RESCALE "Allow using faster, but numerically incosistent rescale methods" ON)
 
 # Write configuration header file.
@@ -464,59 +521,76 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/include/nvhashmap_conf.hpp" CONTENT
  */
 #pragma once
 
-#define NVHM_WITH_SSE           ($<BOOL:${NVHM_WANT_SSE}> && __SSE__)
-#define NVHM_WITH_SSE_PREFETCH  ($<BOOL:${NVHM_WITH_SSE_PREFETCH}> && __SSE__)
-#define NVHM_WITH_SSE2          ($<BOOL:${NVHM_WANT_SSE2}> && __SSE2__)
-#define NVHM_WITH_SSE3          ($<BOOL:${NVHM_WANT_SSE3}> && __SSSE3__)
-#define NVHM_WITH_SSE4          ($<BOOL:${NVHM_WANT_SSE4}> && __SSE4_1__)
-#define NVHM_WITH_AVX2          ($<BOOL:${NVHM_WANT_AVX2}> && __AVX2__)
-#define NVHM_WITH_AVX512        ($<BOOL:${NVHM_WANT_AVX512}> && __AVX512F__ && __AVX512BW__)
-#define NVHM_WITH_AVX_FVL       ($<BOOL:${NVHM_WANT_AVX_FVL}> && __AVX512F__ && __AVX512VL__)
-#define NVHM_WITH_AVX_BWVL      ($<BOOL:${NVHM_WANT_AVX_BWVL}> && __AVX512BW__ && __AVX512VL__)
-#define NVHM_WITH_AVX_VBMI      ($<BOOL:${NVHM_WANT_AVX_VBMI}> && __AVX512VBMI__)
-#define NVHM_WITH_NEON          ($<BOOL:${NVHM_WANT_NEON}> && __ARM_NEON)
-#define NVHM_WITH_SVE           ($<BOOL:${NVHM_WANT_SVE}> && __ARM_FEATURE_SVE && __ARM_FEATURE_SVE_BITS >= 128)
+#if   $<BOOL:${NVHM_WANT_SSE4}> && __SSE__ && __SSE2__ && __SSSE3__ && __SSE4_1__
+#define NVHM_WITH_SSE (4)
+#elif $<BOOL:${NVHM_WANT_SSE3}> && __SSE__ && __SSE2__ && __SSSE3__
+#define NVHM_WITH_SSE (3)
+#elif $<BOOL:${NVHM_WANT_SSE2}> && __SSE__ && __SSE2__
+#define NVHM_WITH_SSE (2)
+#elif $<BOOL:${NVHM_WANT_SSE}>  && __SSE__
+#define NVHM_WITH_SSE (1)
+#else
+#define NVHM_WITH_SSE (0)
+#endif
+
+#if   $<BOOL:${NVHM_WANT_AVX2}> && __AVX__ && __AVX2__
+#define NVHM_WITH_AVX (2)
+#elif $<BOOL:${NVHM_WANT_AVX}>  && __AVX__
+#define NVHM_WITH_AVX (1)
+#else
+#define NVHM_WITH_AVX (0)
+#endif
+
+#define NVHM_WITH_AVX512   ($<BOOL:${NVHM_WANT_AVX512}> && __AVX512F__ && __AVX512BW__)
+#define NVHM_WITH_AVX_FVL  ($<BOOL:${NVHM_WANT_AVX_FVL}> && __AVX512F__ && __AVX512VL__)
+#define NVHM_WITH_AVX_BWVL ($<BOOL:${NVHM_WANT_AVX_BWVL}> && __AVX512BW__ && __AVX512VL__)
+#define NVHM_WITH_AVX_VBMI ($<BOOL:${NVHM_WANT_AVX_VBMI}> && __AVX512VBMI__)
+
+#define NVHM_WITH_NEON     ($<BOOL:${NVHM_WANT_NEON}> && __ARM_NEON)
+
+#if $<BOOL:${NVHM_WANT_SVE2}> && __ARM_FEATURE_SVE2 && __ARM_FEATURE_SVE_BITS
+#define NVHM_WITH_SVE      (2)
+#elif $<BOOL:${NVHM_WANT_SVE}> && __ARM_FEATURE_SVE && __ARM_FEATURE_SVE_BITS
+#define NVHM_WITH_SVE      (1)
+#else
+#define NVHM_WITH_SVE      (0)
+#endif
+#define NVHM_WITH_SVE_SIZE (${NVHM_WANT_SVE_SIZE})
 
 namespace nvhm {
-
-/**
- * In situations where both SVE and NEON are available, prefer SVE over NEON.
- */
-constexpr static bool prefer_sve_over_neon{$<BOOL:${NVHM_WANT_SVE_OVER_NEON}>};
 
 /**
  * Assumed cache line size. For peformance reasons, we allocate buffers at cache line sized
  * boundaries. Also determines the smallest size of a table.
  */
-constexpr static size_t cache_line_size{${NVHM_WANT_CACHE_LINE_SIZE}};
+constexpr static int_t cache_line_size{${NVHM_WANT_CACHE_LINE_SIZE}};
 static_assert(has_single_bit(cache_line_size));
 
 /**
  * Page size.
  */
-constexpr static size_t page_size{${NVHM_WANT_PAGE_SIZE}};
-static_assert(page_size >= cache_line_size && has_single_bit(page_size));
+constexpr static int_t page_size{${NVHM_WANT_PAGE_SIZE}};
+static_assert(has_single_bit(page_size));
+static_assert(page_size >= cache_line_size);
+
+constexpr static bool page_align_by_default{$<BOOL:${NVHM_WANT_PAGE_ALIGNMENT}>};
 
 /**
  * Hugepage size.
  */
-constexpr static size_t hugepage_size{${NVHM_WANT_HUGEPAGE_SIZE}};
-static_assert(hugepage_size >= hugepage_size && has_single_bit(page_size));
+constexpr static int_t hugepage_size{${NVHM_WANT_HUGEPAGE_SIZE}};
+static_assert(has_single_bit(hugepage_size));
+static_assert(hugepage_size >= page_size);
 
 /**
  * Enable hugepage allocation.
  */
-constexpr static bool use_hugepages{$<BOOL:${NVHM_WANT_HUGEPAGES}>};
+constexpr static bool use_hugepages_by_default{$<BOOL:${NVHM_WANT_HUGEPAGES}>};
 
 /**
  * Allow using transparent hugepages.
  */
-constexpr static bool use_transparent_hugepages{$<BOOL:${NVHM_WANT_TRANSPARENT_HUGEPAGES}>};
-
-/**
- * Allow false mask-function to return false positives. This can make masking is faster, but may cause uncessary subsequent checks.
- */
-constexpr static bool allow_false_positive_matches{$<BOOL:${NVHM_ALLOW_FALSE_POSITIVE_MATCHES}>};
+constexpr static bool prefer_transparent_hugepages{$<BOOL:${NVHM_WANT_TRANSPARENT_HUGEPAGES}>};
 
 /**
  * Allow LRU rescales to happen faster (but results might be not comparable between kernels).
@@ -528,6 +602,16 @@ constexpr static bool allow_fast_lru_rescale{$<BOOL:${NVHM_ALLOW_FAST_LRU_RESCAL
  */
 constexpr static int prefetch_cache_level{${NVHM_WANT_PREFETCH_CACHE_LEVEL}};
 static_assert(prefetch_cache_level >= 1 && prefetch_cache_level <= 5);
+
+/**
+ * Use SVE copy function by default.
+ */
+constexpr static bool use_sve_copy{$<BOOL:${NVHM_WANT_SVE_COPY}>};
+
+/**
+ * Prefer SSE prefetch over builtin prefetch.
+ */
+constexpr static bool use_sse_prefetch{$<BOOL:${NVHM_WANT_SSE_PREFETCH}>};
 
 /**
  * Use range prefetch instructions if available (ARM64 only,experimental feature, not recommended for production use)!
@@ -562,20 +646,20 @@ constexpr static hash_layout_t hash_layout{hash_layout_t::monkey_wrench};
 
 }  // namespace nvhm")
 
+message(STATUS "CMAKE_CXX_FLAGS = ${CMAKE_CXX_FLAGS}")
+add_subdirectory(third_party)
+
+# Enable warnings.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion")
+
 # All done. Let's build!
 include_directories(
   "${PROJECT_SOURCE_DIR}/include"
   "${CMAKE_BINARY_DIR}/include"
 )
 
-message(STATUS "CMAKE_CXX_FLAGS = ${CMAKE_CXX_FLAGS}")
-
 if (NVHM_BUILD_TESTS)
   add_subdirectory(tests)
-endif()
-
-if (NVHM_BUILD_BENCH)
-  add_subdirectory(benchmark)
 endif()
 
 if (NVHM_BUILD_TOOLS)

@@ -16,6 +16,7 @@
 cmake_minimum_required(VERSION 3.12)
 
 include_directories(
+  ${PROJECT_SOURCE_DIR}/third_party/cli11/include
   ${PROJECT_SOURCE_DIR}/third_party/parallel-hashmap/parallel_hashmap
   ${PROJECT_SOURCE_DIR}/third_party/abseil-cpp
   ${PROJECT_SOURCE_DIR}/third_party/folly
@@ -23,4 +24,14 @@ include_directories(
 )
 
 add_executable(benchmark benchmark.cpp)
-target_link_libraries(benchmark absl::hash absl::raw_hash_set folly)
+target_link_libraries(benchmark absl::hash absl::raw_hash_set)
+target_compile_definitions(benchmark PRIVATE
+  NVHM_BENCH_COMPILE_KERNELS=20
+  NVHM_BENCH_COMPILE_PROBE_SEQS=0
+  NVHM_BENCH_COMPILE_MAP_TYPES=20
+)
+if (DEFINED CMAKE_CXX_STANDARD)
+  if (${CMAKE_CXX_STANDARD} GREATER_EQUAL 20)
+    target_link_libraries(benchmark folly)
+  endif()
+endif()

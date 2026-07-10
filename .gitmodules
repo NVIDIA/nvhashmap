@@ -10,3 +10,6 @@
 [submodule "third_party/folly"]
 	path = third_party/folly
 	url = https://github.com/facebook/folly.git
+[submodule "third_party/cli11"]
+	path = third_party/cli11
+	url = https://github.com/CLIUtils/CLI11.git

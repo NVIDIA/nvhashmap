@@ -11,10 +11,22 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: x86_64
-            runs-on: ubuntu-24.04
-          - name: arm64
-            runs-on: ubuntu-24.04-arm
+          - name: x86_64 gcc
+            runs-on: ubuntu-26.04
+            cc: /usr/bin/gcc
+            cxx: /usr/bin/g++
+          - name: x86_64 clang
+            runs-on: ubuntu-26.04
+            cc: /usr/bin/clang
+            cxx: /usr/bin/clang++
+          - name: arm64 gcc
+            runs-on: ubuntu-26.04-arm
+            cc: /usr/bin/gcc
+            cxx: /usr/bin/g++
+          - name: arm64 clang
+            runs-on: ubuntu-26.04-arm
+            cc: /usr/bin/clang
+            cxx: /usr/bin/clang++
 
     name: ${{ matrix.name }} tests
     runs-on: ${{ matrix.runs-on }}
@@ -26,12 +38,17 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake make g++ libboost-all-dev libdouble-conversion-dev libfast-float-dev libfmt-dev libgflags-dev libgoogle-glog-dev libsodium-dev libssl-dev libunwind-dev
+          sudo apt-get install -y \
+            build-essential clang cmake g++ gcc make \
+            libboost-all-dev libdouble-conversion-dev libfast-float-dev libfmt-dev libgflags-dev \
+            libgoogle-glog-dev libsodium-dev libssl-dev libstdc++-16-dev libunwind-dev
 
       - name: Configure (CMake)
         run: |
           git submodule update --init --recursive
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          sed -i 's|#include <bmi2intrin.h>|#include <x86gprintrin.h>|' ./third_party/abseil-cpp/absl/container/internal/raw_hash_set.h
+          CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: |
@@ -40,6 +57,8 @@ jobs:
       - name: Run GoogleTest binaries
         run: |
           ./build/tests/test_basics
+          ./build/tests/test_memory
           ./build/tests/test_masks
           ./build/tests/test_kernels
           ./build/tests/test_maps
+          ./build/tests/test_probe_seq

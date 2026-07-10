@@ -84,8 +84,8 @@ We are not aware of any compilation issues with `gcc` / `g++` versions. Please f
 
 ### For NVIDIA Grace
 ```shell
-git clone https://gitlab-master.nvidia.com/mlanger/monkey-wrench.git
-cd monkey-wrench
+git clone https://github.com/NVIDIA/nvhashmap.git
+cd nvhashmap
 git submodule update --init --recursive
 mkdir build
 cd build
@@ -95,8 +95,8 @@ cmake -DNVHM_WANT_ALL=ON -DCMAKE_CXX_FLAGS="-march=armv9-a -mtune=neoverse-v2" .
 
 ### For other CPUs
 ```shell
-git clone https://gitlab-master.nvidia.com/mlanger/monkey-wrench.git
-cd monkey-wrench
+git clone https://github.com/NVIDIA/nvhashmap.git
+cd nvhashmap
 git submodule update --init --recursive
 mkdir build
 cd build
@@ -140,27 +140,27 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET FALSE)
 
 FetchContent_Declare(
-  monkey-wrench
+  nvhashmap
   DOWNLOAD_COMMAND git clone
     --branch main
     --depth 1
-    --progress "https://gitlab-master.nvidia.com/mlanger/monkey-wrench.git"
-    ${CMAKE_BINARY_DIR}/_deps/monkey-wrench-src
+    --progress "https://github.com/NVIDIA/nvhashmap.git"
+    ${CMAKE_BINARY_DIR}/_deps/nvhashmap-src
 )
-FetchContent_Populate(monkey-wrench)
+FetchContent_Populate(nvhashmap)
 
-execute_process(WORKING_DIRECTORY ${monkey-wrench_BINARY_DIR}
+execute_process(WORKING_DIRECTORY ${nvhashmap_BINARY_DIR}
   COMMAND cmake
     -DCMAKE_BUILD_TYPE=Release
     -DBUILD_TESTS=OFF
     -DBUILD_BENCH=OFF
-    ${monkey-wrench_SOURCE_DIR}
+    ${nvhashmap_SOURCE_DIR}
   COMMAND_ERROR_IS_FATAL ANY
 )
 
 include_directories(
-  ${monkey-wrench_SOURCE_DIR}/include
-  ${monkey-wrench_BINARY_DIR}/include
+  ${nvhashmap_SOURCE_DIR}/include
+  ${nvhashmap_BINARY_DIR}/include
 )
 ```
 
