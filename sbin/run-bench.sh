@@ -3,56 +3,65 @@
 BENCH_CMD="numactl -N 0 -m 0 ./tools/benchmark/benchmark"
 
 NUM_KEYS=50000000
-NUM_TRIALS=10
+KEY_SOURCE=polynomial
+KEY_C0=13
+KEY_C1=3
+KEY_C2=7
+SEED=1337
 
-# Fastest Insert on Grace
-$BENCH_CMD --num_workers 1\
-  --insert_queue_type shift --max_insert_queue_len 3\
-  --find_keep_perc 100 --find_queue_type ring --max_find_queue_len 0\
-  --map_type nvhm_map --kernel_type default
+KEY_SETUP="--num_keys $NUM_KEYS --key_source $KEY_SOURCE --key_c0 $KEY_C0 --key_c1 $KEY_C1 --key_c2 $KEY_C2 --seed $SEED"
 
-# Fastest Find on Grace
-$BENCH_CMD --num_workers 1 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 100 --find_queue_type ring --max_find_queue_len 8\
-  --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 1 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 50 --find_queue_type ring --max_find_queue_len 12\
-  --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 1 --num_keys $NUM_KEYS\
-   --insert_queue_type shift --max_insert_queue_len 0\
-   --find_keep_perc 10 --find_queue_type ring --max_find_queue_len 24\
-   --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 1 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 1 --find_queue_type ring --max_find_queue_len 48\
-  --map_type nvhm_map --kernel_type default
 
-$BENCH_CMD --num_workers 8 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 100 --find_queue_type ring --max_find_queue_len 4\
-  --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 8 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 50 --find_queue_type ring --max_find_queue_len 8\
-  --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 8 --num_keys $NUM_KEYS\
-   --insert_queue_type shift --max_insert_queue_len 0\
-   --find_keep_perc 10 --find_queue_type ring --max_find_queue_len 16\
-   --map_type nvhm_map --kernel_type default
-$BENCH_CMD --num_workers 8 --num_keys $NUM_KEYS\
-  --insert_queue_type shift --max_insert_queue_len 0\
-  --find_keep_perc 1 --find_queue_type ring --max_find_queue_len 0\
-  --map_type nvhm_map --kernel_type default
+# Insert
+NUM_INSERT_TRIALS=5
+NUM_FIND_TRIALS=0
 
-for NUM_WORKERS in 1 8; do
-  for FIND_KEEP_PERC in 100 50 10 1; do
-    for MAP_TYPE in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
-    $BENCH_CMD --num_trials $NUM_TRIALS --num_workers $NUM_WORKERS --num_keys $NUM_KEYS\
-      --insert_queue_type shift --max_insert_queue_len 0\
-      --find_keep_perc $FIND_KEEP_PERC --find_queue_type ring --max_find_queue_len 0\
-      --map_type $MAP_TYPE --kernel_type default
-    done
+SETUP="$KEY_SETUP"
+SETUP="$SETUP --num_insert_trials $NUM_INSERT_TRIALS --num_find_trials $NUM_FIND_TRIALS"
+SETUP="$SETUP --insert_queue_type shift --max_find_queue_len 0"
+
+$BENCH_CMD --map_type "nvhm_map" --num_workers 1 $SETUP\
+  --max_insert_queue_len 3
+
+for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
+  $BENCH_CMD --map_type $map_type --num_workers 1 $SETUP\
+    --max_insert_queue_len 0
+done
+
+
+# Find
+NUM_INSERT_TRIALS=0
+NUM_FIND_TRIALS=5
+
+SETUP="$KEY_SETUP"
+SETUP="$SETUP --num_insert_trials $NUM_INSERT_TRIALS --num_find_trials $NUM_FIND_TRIALS"
+SETUP="$SETUP --min_insert_queue_len 0 --max_insert_queue_len 0"
+SETUP="$SETUP --find_queue_type ring"
+
+# 1 worker.
+for perc_qlen in "100 6" "50 12" "10 24" "1 28"; do
+  set -- $perc_qlen
+  perc=$1
+  qlen=$2
+  $BENCH_CMD --map_type nvhm_map --num_workers 1 $SETUP\
+    --find_keep_perc $perc --max_find_queue_len $qlen
+
+  for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
+    $BENCH_CMD --map_type $map_type --num_workers 1 $SETUP\
+      --find_keep_perc $perc --max_find_queue_len 0
+  done
+done
+
+# 8 worker.
+for perc_qlen in "100 4" "50 6" "10 16" "1 20"; do
+  set -- $perc_qlen
+  perc=$1
+  qlen=$2
+  $BENCH_CMD --map_type nvhm_map --num_workers 8 $SETUP\
+    --find_keep_perc $perc --max_find_queue_len $qlen
+
+  for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
+    $BENCH_CMD --map_type $map_type --num_workers 8 $SETUP\
+      --find_keep_perc $perc --max_find_queue_len 0
   done
 done
