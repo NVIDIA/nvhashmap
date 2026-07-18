@@ -20,7 +20,20 @@
 
 using namespace nvhm;
 
-int main() {
-  using map_t = map<dummy_key, dummy_value, flags_t::all>;
+template <flags_t Flags>
+int compile_map() {
+  using map_t = map<dummy_key, dummy_value, Flags>;
   return compile_map<false, map_t>();
+}
+
+int main() {
+  int i{};
+  i += compile_map<flags_t::none>();
+  i += compile_map<flags_t::blobs>();
+  i += compile_map<flags_t::duplicates>();
+  i += compile_map<flags_t::aggressive_prefetch>();
+  i += compile_map<flags_t::auto_scrub>();
+  i += compile_map<flags_t::auto_shrink>();
+  i += compile_map<flags_t::all>();
+  return i;
 }

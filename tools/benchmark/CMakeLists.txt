@@ -16,22 +16,28 @@
 cmake_minimum_required(VERSION 3.12)
 
 include_directories(
-  ${PROJECT_SOURCE_DIR}/third_party/cli11/include
   ${PROJECT_SOURCE_DIR}/third_party/parallel-hashmap/parallel_hashmap
   ${PROJECT_SOURCE_DIR}/third_party/abseil-cpp
-  ${PROJECT_SOURCE_DIR}/third_party/folly
-  ${CMAKE_CURRENT_BINARY_DIR}/../third_party/folly
 )
+
+# `NVHM_TOOLS_COMPILE_MAP_TYPES`: Controls the amount of map type variants compiled.
+#    0: Default map type only.
+# >=10: Std-library type and shim.
+# >=20: All platform map types.
 
 add_executable(benchmark benchmark.cpp)
 target_link_libraries(benchmark absl::hash absl::raw_hash_set)
 target_compile_definitions(benchmark PRIVATE
-  NVHM_BENCH_COMPILE_KERNELS=0
-  NVHM_BENCH_COMPILE_PROBE_SEQS=0
-  NVHM_BENCH_COMPILE_MAP_TYPES=20
+  NVHM_TOOLS_COMPILE_KERNELS=0
+  NVHM_TOOLS_COMPILE_PROBE_SEQS=0
+  NVHM_TOOLS_COMPILE_MAP_TYPES=20
 )
 if (DEFINED CMAKE_CXX_STANDARD)
   if (${CMAKE_CXX_STANDARD} GREATER_EQUAL 20)
+    target_include_directories(benchmark PRIVATE
+      ${PROJECT_SOURCE_DIR}/third_party/folly
+      ${CMAKE_CURRENT_BINARY_DIR}/../third_party/folly
+    )
     target_link_libraries(benchmark folly)
   endif()
 endif()

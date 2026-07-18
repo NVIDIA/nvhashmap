@@ -26,6 +26,17 @@ namespace nvhm {
 #endif
 #define NVHM_CONTAINER_INTERFACE_()\
   /**
+   * Collects the population bucket population distribution.
+   *
+   * @return An array of size `kernel_type::size + 1` containing the population distribution.
+   */\
+  constexpr std::array<int_t, kernel_size + 1> kernel_populations() const {\
+    std::array<int_t, kernel_size + 1> counts{};\
+    self()->count_kernel_populations(counts);\
+    return counts;\
+  }\
+  \
+  /**
    * Count the number of collisions for each bucket.
    *
    * @return An array of size `kernel_size` containing the number of collision distribution.

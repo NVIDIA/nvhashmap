@@ -73,7 +73,7 @@ int compile_map(Args&&... args) {
   bool b;
   double d;
   int_t i;
-  const blob_t* cbl;
+  const blob_t* cbl{};
   blob_t* bl{reinterpret_cast<blob_t*>(&c)};
   key_t k;
   state_t s;
@@ -90,8 +90,13 @@ int compile_map(Args&&... args) {
   std::vector<read_pos_t> r_poses;
   std::vector<write_pos_t> w_poses;
   std::array<int_t, map_t::kernel_size> counts;
+  std::array<int_t, map_t::kernel_size + 1> counts1;
 
-  map_t map{args..., conf_t{}.set_capacity(1024).set_blob(128)};
+  c.set_capacity(1024);
+  if constexpr (map_t::has_blobs) {
+    c.set_blob(128);
+  }
+  map_t map{args..., c};
   const map_t& cmap{map};
 
   write_pos_t w_pos{map.insert(k)};
@@ -101,8 +106,10 @@ int compile_map(Args&&... args) {
   iterator_t it{map.begin()};
   probe_seq_t seq{std::get<2>(map.erase_first(k))};
 
-  blobs = cmap.all_blobs_for(k);
-  blobs = map.all_blobs_for(k);
+  if constexpr (map_t::has_blobs) {
+    blobs = cmap.all_blobs_for(k);
+    blobs = map.all_blobs_for(k);
+  }
 
   vals = cmap.all_values_for(k);
   vals = map.all_values_for(k);
@@ -112,17 +119,21 @@ int compile_map(Args&&... args) {
   entry_t e0{map.at(w_pos)};
   std::get<1>(map.at(w_pos)) = v;
   std::get<1>(map.at(w_pos)) = std::move(v);
-  *std::get<2>(map.at(w_pos)) = *bl;
+  if constexpr (map_t::has_blobs) {
+    *std::get<2>(map.at(w_pos)) = *bl;
+  }
 
   cit = cmap.begin();
   it = map.begin();
 
-  cbl = cmap.blob_at(r_pos);
-  cbl = map.blob_at(r_pos);
-  bl = map.blob_at(w_pos);
-  *map.blob_at(w_pos) = *bl;
-  blobs = cmap.blobs();
-  blobs = map.blobs();
+  if constexpr (map_t::has_blobs) {
+    cbl = cmap.blob_at(r_pos);
+    cbl = map.blob_at(r_pos);
+    bl = map.blob_at(w_pos);
+    *map.blob_at(w_pos) = *bl;
+    blobs = cmap.blobs();
+    blobs = map.blobs();
+  }
 
   i = cmap.bucket_size_at(r_pos);
   i = map.bucket_size_at(r_pos);
@@ -162,6 +173,8 @@ int compile_map(Args&&... args) {
   i = cmap.count_if([](const read_pos_t& p) { return p != npos; });
   i = map.count_if([](const read_pos_t& p) { return p != npos; });
 
+  cmap.count_kernel_populations(counts1);
+  map.count_kernel_populations(counts1);
   cmap.count_state_collisions(counts);
   map.count_state_collisions(counts);
 
@@ -207,10 +220,15 @@ int compile_map(Args&&... args) {
   map.for_each(k, [&](const read_pos_t&, const probe_seq_t&) {});
   map.for_each(k, [&](const write_pos_t&, const probe_seq_t&) {});
 
-  cmap.for_each_blob([](const blob_t*) {});
-  map.for_each_blob([](blob_t*) {});
-  cmap.for_each_entry([](const key_t&, const value_t&, const blob_t*) {});
-  map.for_each_entry([](const key_t&, value_t&, blob_t*) {});
+  if constexpr (map_t::has_blobs) {
+    cmap.for_each_blob([](const blob_t*) {});
+    map.for_each_blob([](blob_t*) {});
+    cmap.for_each_entry([](const key_t&, const value_t&, const blob_t*) {});
+    map.for_each_entry([](const key_t&, value_t&, blob_t*) {});
+  } else {
+    cmap.for_each_entry([](const key_t&, const value_t&) {});
+    map.for_each_entry([](const key_t&, value_t&) {});
+  }
   cmap.for_each_key([](const key_t&) {});
   map.for_each_key([](const key_t&) {});
   cmap.for_each_lru([](const lru_t&) {});
@@ -220,12 +238,14 @@ int compile_map(Args&&... args) {
   cmap.for_each_value([](const value_t&) {});
   map.for_each_value([](value_t&) {});
 
-  cmap.get_blob_at(r_pos, &c);
-  map.get_blob_at(r_pos, &c);
-  map.get_blob_at(w_pos, &c);
-  cmap.get_blob_at(r_pos, &c, 1);
-  map.get_blob_at(r_pos, &c, 1);
-  map.get_blob_at(w_pos, &c, 1);
+  if constexpr (map_t::has_blobs) {
+    cmap.get_blob_at(r_pos, &c);
+    map.get_blob_at(r_pos, &c);
+    map.get_blob_at(w_pos, &c);
+    cmap.get_blob_at(r_pos, &c, 1);
+    map.get_blob_at(r_pos, &c, 1);
+    map.get_blob_at(w_pos, &c, 1);
+  }
 
   i = map.grow();
 
@@ -239,6 +259,9 @@ int compile_map(Args&&... args) {
   b = map.is_empty();
   b = cmap.is_full();
   b = map.is_full();
+
+  counts1 = cmap.kernel_populations();
+  counts1 = map.kernel_populations();
 
   k = cmap.key_at(r_pos);
   k = map.key_at(r_pos);
@@ -279,10 +302,12 @@ int compile_map(Args&&... args) {
   map.read_prefetch_value_at(r_pos);
   cmap.read_prefetch_value_at(w_pos);
   map.read_prefetch_value_at(w_pos);
-  cmap.read_prefetch_blob_at(r_pos);
-  map.read_prefetch_blob_at(r_pos);
-  cmap.read_prefetch_blob_at(w_pos);
-  map.read_prefetch_blob_at(w_pos);
+  if constexpr (map_t::has_blobs) {
+    cmap.read_prefetch_blob_at(r_pos);
+    map.read_prefetch_blob_at(r_pos);
+    cmap.read_prefetch_blob_at(w_pos);
+    map.read_prefetch_blob_at(w_pos);
+  }
   
   cmap.render(std::cout);
   map.render(std::cout);
@@ -298,8 +323,10 @@ int compile_map(Args&&... args) {
   i = map.scrub();
   i = map.scrub(max_lru);
 
-  map.set_blob_at(w_pos, &c);
-  map.set_blob_at(w_pos, &c, 1);
+  if constexpr (map_t::has_blobs) {
+    map.set_blob_at(w_pos, &c);
+    map.set_blob_at(w_pos, &c, 1);
+  }
 
   map.set_value_at(w_pos, v);
 
@@ -344,7 +371,9 @@ int compile_map(Args&&... args) {
   hint = map.write_prefetch(k);
   map.write_prefetch(k, hint);
   map.write_prefetch_value_at(w_pos);
-  map.write_prefetch_blob_at(w_pos);
+  if constexpr (map_t::has_blobs) {
+    map.write_prefetch_blob_at(w_pos);
+  }
   
   m = map[k];
   map[k] = m;
@@ -368,8 +397,10 @@ int compile_map(Args&&... args) {
   using const_entry_ptr_t = typename const_iterator_t::entry_ptr_type;
   using entry_ptr_t = typename iterator_t::entry_ptr_type;
 
-  cbl = cit.blob();
-  bl = it.blob();
+  if constexpr (map_t::has_blobs) {
+    cbl = cit.blob();
+    bl = it.blob();
+  }
   const_entry_t ce2{cit.entry()};
   entry_t e1{it.entry()};
   k = cit.key();
