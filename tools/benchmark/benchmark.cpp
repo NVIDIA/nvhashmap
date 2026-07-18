@@ -62,7 +62,7 @@ class stopwatch {
    std::chrono::high_resolution_clock::time_point begin_;
  };
  
-static std::atomic_int64_t num_workers_ready;
+std::atomic_int64_t num_workers_ready;
 
 class worker {
  public:
@@ -134,7 +134,7 @@ inline std::ostream& operator<<(std::ostream& os, statistic_t s) {
   return os << to_string(s);
 }
 
-static statistic_t stat{statistic_t::max};
+statistic_t stat{statistic_t::max};
 
 template <typename It>
 NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It begin, It last) {
@@ -172,7 +172,7 @@ NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It
   }
 }
 
-static int_t blob_size{256};
+int_t blob_size{256};
 
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob) {
@@ -285,7 +285,8 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_insert_std(worker& __restrict w, int_t 
 
   return {true, i - i0};
 }
-static bool check_blobs{false};
+
+bool check_blobs{false};
 
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restrict map, int_t i, const Key& __restrict k, PrefetchHint&& h, bool should_exist) {
@@ -462,20 +463,20 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(worker& __restrict w, int_t ba
   return {b, n};
 }
 
-static int_t num_keys{50'000'000};
-static key_source_t key_source{key_source_t::polynomial};
-static int_t key_c[]{13, 3, 7};
-static int_t num_workers{8};
-static int_t num_insert_trials{5};
-static queue_t insert_queue_type{queue_t::ring};
-static int_t min_insert_queue_len{0};
-static int_t max_insert_queue_len{0};
-static int_t num_find_trials{5};
-static int_t find_keep_perc{100};
-static queue_t find_queue_type{queue_t::ring};
-static int_t min_find_queue_len{0};
-static int_t max_find_queue_len{0};
-static std::size_t seed{rd()};
+int_t num_keys{50'000'000};
+key_source_t key_source{key_source_t::polynomial};
+int_t key_c[]{13, 3, 7};
+int_t num_workers{8};
+int_t num_insert_trials{5};
+queue_t insert_queue_type{queue_t::ring};
+int_t min_insert_queue_len{0};
+int_t max_insert_queue_len{0};
+int_t num_find_trials{5};
+int_t find_keep_perc{100};
+queue_t find_queue_type{queue_t::ring};
+int_t min_find_queue_len{0};
+int_t max_find_queue_len{0};
+std::size_t seed{rd()};
 
 template <typename Map>
 NVHM_NO_INLINE void bench_nvhm_map() {
