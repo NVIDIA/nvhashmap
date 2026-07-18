@@ -40,16 +40,16 @@ void count_collisions(const state_t* states, std::array<Count, Kernel::size>& ac
     *it++ = kern_t::at(k, idx);
   }
   // Not exactly sure why GCC complains about this. I cannot see how this can even happen?!
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunknown-pragmas"
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunknown-warning-option"
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Warray-bounds="
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wunknown-pragmas"
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wunknown-warning-option"
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Warray-bounds"
   std::sort(tmp.begin(), it);
-#pragma GCC diagnostic pop
-#pragma clang diagnostic pop
-#pragma GCC diagnostic pop
+  #pragma GCC diagnostic pop
+  #pragma clang diagnostic pop
+  #pragma GCC diagnostic pop
 
   it = std::unique(tmp.begin(), it);
   while (it-- > tmp.begin()) {

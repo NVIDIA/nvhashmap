@@ -449,6 +449,10 @@ class guarded : public container<guarded<Inner>> {
       }
     );
   }
+  constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const {
+    read_lock_type lock{lock_()};
+    inner_.count_kernel_populations(counts);
+  }
   constexpr void count_state_collisions(std::array<int_t, kernel_size>& counts) const {
     read_lock_type lock{lock_()};
     inner_.count_state_collisions(counts);

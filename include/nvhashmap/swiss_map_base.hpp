@@ -100,6 +100,15 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
   }
 
   /**
+   * Collects the population bucket population distribution.
+   *
+   * @param counts An array of size `kernel_type::size + 1` containing the population distribution. Not zeroed before use.
+   */
+  constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const noexcept {
+    self()->count_kernel_populations_(counts);
+  }
+
+  /**
    * Count the number of collisions for each bucket.
    *
    * @param counts An array of size `kernel_type::size` containing the number of collision distribution. Not zeroed before use.

@@ -458,6 +458,9 @@ class sharded : public container<sharded<Shard>> {
     );
     return n;
   }
+  constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const {
+    for (const shard_type& shard : shards_) shard.count_kernel_populations(counts);
+  }
   constexpr void count_state_collisions(std::array<int_t, kernel_size>& counts) const {
     for (const shard_type& shard : shards_) shard.count_state_collisions(counts);
   }
