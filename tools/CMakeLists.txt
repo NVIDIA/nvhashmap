@@ -31,11 +31,6 @@ include_directories(
 # >=10: Unaligned probe squences.
 # >=20: Aligned probe sequences.
 
-# `NVHM_TOOLS_COMPILE_MAP_TYPES`: Controls the amount of map type variants compiled.
-#    0: Default map type only.
-# >=10: Std-library type and shim.
-# >=20: All platform map types.
-
 add_executable(coll_count coll_count.cpp)
 target_compile_definitions(coll_count PRIVATE
   NVHM_TOOLS_COMPILE_KERNELS=10
