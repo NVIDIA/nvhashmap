@@ -23,6 +23,7 @@
 #include <unordered_map>
 
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #include <phmap.h>
 #pragma GCC diagnostic pop
