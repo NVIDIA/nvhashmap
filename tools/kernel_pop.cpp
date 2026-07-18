@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +22,6 @@
 using namespace nvhm;
 #include "utils.hpp"
 
-
-
 int_t init_capacity{1};
 int_t num_keys{1'000'000};
 key_source_t key_source{key_source_t::polynomial};
@@ -31,11 +29,11 @@ int_t key_c[]{13, 3, 7};
 test_trigger_t test_trigger{test_trigger_t::interval};
 int_t test_interval{50'000};
 int_t test_load_perc{85};
-int precision{3};
+int precision{1};
 std::size_t seed{rd()};
 
 template <typename Set>
-NVHM_NO_INLINE void fill_and_count_collisions() {
+NVHM_NO_INLINE void fill_and_count_populations() {
   using set_t = Set;
   using conf_t = typename set_t::conf_type;
   using key_t = typename set_t::key_type;
@@ -45,7 +43,7 @@ NVHM_NO_INLINE void fill_and_count_collisions() {
   std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
   const int num_align{rendered_length(num_keys)};
   
-  std::cout << type_to_string<set_t>() << ", collisions @ ";
+  std::cout << type_to_string<set_t>() << ", populations @ ";
   switch (test_trigger) {
     case test_trigger_t::interval:
       std::cout << test_interval << " interval";
@@ -60,14 +58,14 @@ NVHM_NO_INLINE void fill_and_count_collisions() {
 
   std::cout << "| " << std::setw(num_align) << "size";
   std::cout << " | " << std::setw(num_align) << "cap.";
-  for (int_t i{}; i < set_t::kernel_size; ++i) {
+  for (int_t i{}; i <= set_t::kernel_size; ++i) {
     std::cout << " | " << std::setw(num_align) << i;
   }
   std::cout << " |\n";
 
   std::cout << std::setfill('-');
   const char* sep = "| ";
-  for (int_t i{}; i < 2 + set_t::kernel_size; ++i) {
+  for (int_t i{}; i <= 2 + set_t::kernel_size; ++i) {
     std::cout << sep << std::setw(num_align) << "";
     sep = " | ";
   }
@@ -87,21 +85,17 @@ NVHM_NO_INLINE void fill_and_count_collisions() {
         break;
     }
 
-    const double dbl_size{static_cast<double>(set.size())};
+    const double num_kernels{static_cast<double>(set.capacity() / set_t::kernel_size)};
 
-    auto stats{set.state_collisions()};
-    auto last{stats.end()};
-    while (--last != stats.begin()) {
-      if (*last != 0) break;
-    }
+    auto pops{set.kernel_populations()};
 
     std::cout << "| " << std::setw(num_align) << set.size();
     std::cout << " | " << std::setw(num_align) << set.capacity();
     std::cout << std::fixed << std::setprecision(precision);
-    for (auto it{stats.begin()}; it != stats.end(); ++it) {
+    for (int_t pop : pops) {
       std::cout << " | " << std::setw(num_align);
-      if (it <= last) {
-        std::cout << static_cast<double>(*it * (it - stats.begin() + 1) * 100) / dbl_size;
+      if (pop) {
+        std::cout << static_cast<double>(pop * 100) / num_kernels;
       } else {
         std::cout << "";
       }
@@ -116,9 +110,9 @@ template <typename Key, typename Kernel, typename ProbeSeq>
 void run_3(nvhm_type_t nvhm_type) {
   switch (nvhm_type) {
     case nvhm_type_t::map:
-      return fill_and_count_collisions<set<Key, flags_t::none, Kernel, ProbeSeq>>();
+      return fill_and_count_populations<set<Key, flags_t::none, Kernel, ProbeSeq>>();
     case nvhm_type_t::cache:
-      return fill_and_count_collisions<cache_set<Key, flags_t::none, Kernel>>();
+      return fill_and_count_populations<cache_set<Key, flags_t::none, Kernel>>();
   }
 
   std::ostringstream os;
@@ -247,7 +241,7 @@ void run_0(key_type_t key_type, kernel_type_t kernel_type, probe_seq_type_t prob
 }
 
 int main(int argc, char* argv[]) {
-  CLI::App app{"State collision analsysis tool"};
+  CLI::App app{"Kernel population analysis tool"};
   
   key_type_t key_type{key_type_t::int64};
   kernel_type_t kernel_type{kernel_type_t::default_};

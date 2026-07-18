@@ -15,15 +15,12 @@
  * limitations under the License.
  */
 
-#include <chrono>
-#include <map>
-#include <unordered_map>
 #include <nvhashmap/map.hpp>
 #include <nvhashmap/std_map_shim.hpp>
 #include <nvhashmap/prefetch.hpp>
-//#include <random>
+#include <chrono>
 #include <thread>
-#include <CLI/CLI.hpp>
+#include <unordered_map>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-conversion"
@@ -44,30 +41,6 @@
 
 using namespace nvhm;
 #include "../utils.hpp"
-
-/**
- * `nvhm_bench_compile_kernels` is used to control the level of compile-time optimizations.
- *    0: Default kernel only.
- * >=10: All default kernels.
- * >=20: All (available) platform kernels
- * >=30: All integer kernels.
- * >=40: All (fallback) array kernels.
- */
- constexpr static int_t nvhm_bench_compile_kernels{NVHM_BENCH_COMPILE_KERNELS};
- /**
-  * `nvhm_bench_compile_probe_seqs` is used to control the level of compile-time optimizations.
-  *    0: Default probe sequence only.
-  * >=10: Unaligned probe squences.
-  * >=20: Aligned probe sequences.
-  */
- constexpr static int_t nvhm_bench_compile_probe_seqs{NVHM_BENCH_COMPILE_PROBE_SEQS};
- /**
-  * `nvhm_bench_compile_map_types` is used to control the level of compile-time optimizations.
-  *    0: Default map type only.
-  * >=10: Std-library type and shim.
-  * >=20: All platform map types.
-  */
-constexpr static int_t nvhm_bench_compile_map_types{NVHM_BENCH_COMPILE_MAP_TYPES};
 
 class stopwatch {
   public:
@@ -489,23 +462,6 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(worker& __restrict w, int_t ba
   return {b, n};
 }
 
-enum class key_source_t {
-  polynomial,
-  random
-};
-
-constexpr const char* to_string(key_source_t kd) {
-  switch (kd) {
-    case key_source_t::polynomial: return "polynomial";
-    case key_source_t::random: return "random";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, key_source_t kd) {
-  return os << to_string(kd);
-}
-
 static int_t num_keys{50'000'000};
 static key_source_t key_source{key_source_t::polynomial};
 static int_t key_c[]{13, 3, 7};
@@ -550,23 +506,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
     workers.emplace_back(i);
   }
   
-  std::vector<key_t> keys(to_uint(num_keys));
-  std::uniform_int_distribution<key_t> uniform_dist;
-  for (int_t i{}; i < num_keys; ++i) {
-    switch (key_source) {
-      case key_source_t::polynomial:
-        keys[to_uint(i)] = static_cast<key_t>(key_c[2] * i * i + key_c[1] * i + key_c[0]);
-        break;
-      case key_source_t::random:
-        keys[to_uint(i)] = uniform_dist(rng);
-        break;
-      default:
-        throw std::runtime_error("Unsupported `key_source`!");
-    }
-  }
-  if (key_source != key_source_t::random) {
-    std::shuffle(keys.begin(), keys.end(), rng);
-  }
+  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
 
   std::vector<char> blobs;
   conf_t conf{};
@@ -757,7 +697,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
 }
 
 template <typename Map, typename Value, bool HasBlobs, bool SerializeCopy>
-void bench_std_map() {
+NVHM_NO_INLINE void bench_std_map() {
   using map_t = Map;
   using key_t = typename map_t::key_type;
   using ptr_t = typename map_t::value_type;
@@ -789,23 +729,7 @@ void bench_std_map() {
     workers.emplace_back(i);
   }
   
-  std::vector<key_t> keys(to_uint(num_keys));
-  std::uniform_int_distribution<key_t> uniform_dist;
-  for (int_t i{}; i < num_keys; ++i) {
-    switch (key_source) {
-      case key_source_t::polynomial:
-        keys[to_uint(i)] = static_cast<key_t>(key_c[2] * i * i + key_c[1] * i + key_c[0]);
-        break;
-      case key_source_t::random:
-        keys[to_uint(i)] = uniform_dist(rng);
-        break;
-      default:
-        throw std::runtime_error("Unsupported `key_source`!");
-    }
-  }
-  if (key_source != key_source_t::random) {
-    std::shuffle(keys.begin(), keys.end(), rng);
-  }
+  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
 
   std::vector<char> blobs;
   if constexpr (has_blobs) {
@@ -922,193 +846,159 @@ void bench_std_map() {
   }
 }
 
+enum class map_type_t {
+  nvhm_map,
+  #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
+  nvhm_std_map_shim,
+  std_unordered_map,
+  #endif
+  #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
+  absl_flat_hash_map,
+  #if __cplusplus >= 202002L
+  folly_f14_value_map,
+  #endif
+  phmap_flat_hash_map,
+  #endif
+};
+
+constexpr const char* to_string(map_type_t mt) {
+  switch (mt) {
+    case map_type_t::nvhm_map: return "nvhm_map";
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
+    case map_type_t::nvhm_std_map_shim: return "nvhm_std_map_shim";
+    case map_type_t::std_unordered_map: return "std_unordered_map";
+    #endif
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
+    case map_type_t::absl_flat_hash_map: return "absl_flat_hash_map";
+    #if __cplusplus >= 202002L
+    case map_type_t::folly_f14_value_map: return "folly_f14_value_map";
+    #endif
+    case map_type_t::phmap_flat_hash_map: return "phmap_flat_hash_map";
+    #endif
+  }
+
+  return "error";
+}
+
+inline std::ostream& operator<<(std::ostream& os, map_type_t mt) {
+  os << to_string(mt);
+  return os;
+}
+
 template <typename Key, typename Value, flags_t Flags, typename Kernel>
-void run_bench_nvhm_map_5(const std::string& probe_seq_type) {
-  if (probe_seq_type == "default") {
-    return bench_nvhm_map<map<Key, Value, Flags, Kernel, default_seq_t>>();
+void run_bench_nvhm_map_5(probe_seq_type_t probe_seq_type) {
+  switch (probe_seq_type) {
+    case probe_seq_type_t::default_: return bench_nvhm_map<map<Key, Value, Flags, Kernel, default_seq_t>>();
+    #if NVHM_TOOLS_COMPILE_PROBE_SEQS >= 10
+    case probe_seq_type_t::linear: return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<0>>>();
+    case probe_seq_type_t::quadratic: return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<0>>>();
+    #endif
+    #if NVHM_TOOLS_COMPILE_PROBE_SEQS >= 20
+    case probe_seq_type_t::aligned_linear: return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<cache_line_size>>>();
+    case probe_seq_type_t::aligned_quadratic: return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<cache_line_size>>>();
+    #endif
   }
-  if constexpr (nvhm_bench_compile_probe_seqs >= 10) {
-    if (probe_seq_type == "linear") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<0>>>();
-    }
-    if (probe_seq_type == "quadratic") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<0>>>();
-    }
-  }
-  if constexpr (nvhm_bench_compile_probe_seqs >= 20) {
-    if (probe_seq_type == "aligned_linear") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, linear_seq<cache_line_size>>>();
-    }
-    if (probe_seq_type == "aligned_quadratic") {
-      return bench_nvhm_map<map<Key, Value, Flags, Kernel, quadratic_seq<cache_line_size>>>();
-    }
-  }
-  throw std::runtime_error("Invalid probe sequence type: " + probe_seq_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_PROBE_SEQS`?");
+ 
+  std::ostringstream os;
+  os << "Invalid probe sequence type: " << probe_seq_type << ". Did you forget to compile with `NVHM_TOOLS_COMPILE_PROBE_SEQS`?";
+  throw std::runtime_error(os.str());
 }
 
 template <typename Key, typename Value, flags_t Flags>
-void run_bench_nvhm_map_4(const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (kernel_type == "default") {
-    return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<>>(probe_seq_type);
-  }
-  if constexpr (nvhm_bench_compile_kernels >= 10) {
-    if (kernel_type == "default1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<1>>(probe_seq_type);
-    } else if (kernel_type == "default2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<2>>(probe_seq_type);
-    } else if (kernel_type == "default4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<4>>(probe_seq_type);
-    } else if (kernel_type == "default8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<8>>(probe_seq_type);
-    } else if (kernel_type == "default16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<16>>(probe_seq_type);
-    } else if (kernel_type == "default32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<32>>(probe_seq_type);
-    } else if (kernel_type == "default64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<64>>(probe_seq_type);
-    } else if (kernel_type == "default128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<128>>(probe_seq_type);
-    } else if (kernel_type == "default256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<256>>(probe_seq_type);
-    } else if (kernel_type == "default512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<512>>(probe_seq_type);
-    }
-  }
-
-  if constexpr (nvhm_bench_compile_kernels >= 20) {
+void run_bench_nvhm_map_4(kernel_type_t kernel_type, probe_seq_type_t probe_seq_type) {
+  switch (kernel_type) {
+    case kernel_type_t::default_: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<>>(probe_seq_type); 
+    #if NVHM_TOOLS_COMPILE_KERNELS >= 10
+    case kernel_type_t::default1: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<1>>(probe_seq_type);
+    case kernel_type_t::default2: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<2>>(probe_seq_type);
+    case kernel_type_t::default4: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<4>>(probe_seq_type);
+    case kernel_type_t::default8: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<8>>(probe_seq_type);
+    case kernel_type_t::default16: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<16>>(probe_seq_type);
+    case kernel_type_t::default32: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<32>>(probe_seq_type);
+    case kernel_type_t::default64: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<64>>(probe_seq_type);
+    case kernel_type_t::default128: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<128>>(probe_seq_type);
+    case kernel_type_t::default256: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<256>>(probe_seq_type);
+    case kernel_type_t::default512: return run_bench_nvhm_map_5<Key, Value, Flags, default_kernel_t<512>>(probe_seq_type);
+    #endif
+    #if NVHM_TOOLS_COMPILE_KERNELS >= 20
     #if NVHM_WITH_SSE >= 2
-    if (kernel_type == "sse") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t>(probe_seq_type);
-    }
+    case kernel_type_t::sse: return run_bench_nvhm_map_5<Key, Value, Flags, sse_kernel_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_AVX >= 2
-    if (kernel_type == "avx") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t>(probe_seq_type);
-    }
+    case kernel_type_t::avx: return run_bench_nvhm_map_5<Key, Value, Flags, avx_kernel_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_AVX512
-    if (kernel_type == "avx512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t>(probe_seq_type);
-    }
+    case kernel_type_t::avx512: return run_bench_nvhm_map_5<Key, Value, Flags, avx512_kernel_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_NEON
-    if (kernel_type == "neon8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel8_t>(probe_seq_type);
-    }
-    if (kernel_type == "neon16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel16_t>(probe_seq_type);
-    }
-    if (kernel_type == "neon32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel32_t>(probe_seq_type);
-    }
-    if (kernel_type == "neon64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel64_t>(probe_seq_type);
-    }
+    case kernel_type_t::neon8: return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel8_t>(probe_seq_type);
+    case kernel_type_t::neon16: return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel16_t>(probe_seq_type);
+    case kernel_type_t::neon32: return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel32_t>(probe_seq_type);
+    case kernel_type_t::neon64: return run_bench_nvhm_map_5<Key, Value, Flags, neon_kernel64_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE
     #if NVHM_WITH_SVE_SIZE >= 1
-    if (kernel_type == "sve1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel1_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve1: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel1_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 2
-    if (kernel_type == "sve2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel2_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve2: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel2_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 4
-    if (kernel_type == "sve4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel4_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve4: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel4_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 8
-    if (kernel_type == "sve8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel8_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve8: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel8_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 16
-    if (kernel_type == "sve16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel16_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve16: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel16_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 32
-    if (kernel_type == "sve32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel32_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve32: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel32_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 64
-    if (kernel_type == "sve64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel64_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve64: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel64_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 128
-    if (kernel_type == "sve128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel128_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve128: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel128_t>(probe_seq_type);
     #endif
     #if NVHM_WITH_SVE_SIZE >= 256
-    if (kernel_type == "sve256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel256_t>(probe_seq_type);
-    }
+    case kernel_type_t::sve256: return run_bench_nvhm_map_5<Key, Value, Flags, sve_kernel256_t>(probe_seq_type);
     #endif
     #endif
+    #endif
+    #if NVHM_TOOLS_COMPILE_KERNELS >= 30
+    case kernel_type_t::uint1: return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel1_t>(probe_seq_type);
+    case kernel_type_t::uint2: return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel2_t>(probe_seq_type);
+    case kernel_type_t::uint4: return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel4_t>(probe_seq_type);
+    case kernel_type_t::uint8: return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel8_t>(probe_seq_type);
+    case kernel_type_t::uint16: return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel16_t>(probe_seq_type);
+    case kernel_type_t::fast_uint1: return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel1_t>(probe_seq_type);
+    case kernel_type_t::fast_uint2: return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel2_t>(probe_seq_type);
+    case kernel_type_t::fast_uint4: return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel4_t>(probe_seq_type);
+    case kernel_type_t::fast_uint8: return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel8_t>(probe_seq_type);
+    case kernel_type_t::fast_uint16: return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel16_t>(probe_seq_type);
+    #endif
+    #if NVHM_TOOLS_COMPILE_KERNELS >= 40
+    case kernel_type_t::array1: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel1_t>(probe_seq_type);
+    case kernel_type_t::array2: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel2_t>(probe_seq_type);
+    case kernel_type_t::array4: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel4_t>(probe_seq_type);
+    case kernel_type_t::array8: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel8_t>(probe_seq_type);
+    case kernel_type_t::array16: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel16_t>(probe_seq_type);
+    case kernel_type_t::array32: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel32_t>(probe_seq_type);
+    case kernel_type_t::array64: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel64_t>(probe_seq_type);
+    case kernel_type_t::array128: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel128_t>(probe_seq_type);
+    case kernel_type_t::array256: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel256_t>(probe_seq_type);
+    case kernel_type_t::array512: return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel512_t>(probe_seq_type);
+    #endif
   }
 
-  if constexpr (nvhm_bench_compile_kernels >= 30) {
-    if (kernel_type == "uint1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel1_t>(probe_seq_type);
-    } else if (kernel_type == "uint2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel2_t>(probe_seq_type);
-    } else if (kernel_type == "uint4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel4_t>(probe_seq_type);
-    } else if (kernel_type == "uint8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel8_t>(probe_seq_type);
-    } else if (kernel_type == "uint16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, uint_kernel16_t>(probe_seq_type);
-    }
-
-    if (kernel_type == "fast_uint1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel1_t>(probe_seq_type);
-    } else if (kernel_type == "fast_uint2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel2_t>(probe_seq_type);
-    } else if (kernel_type == "fast_uint4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel4_t>(probe_seq_type);
-    } else if (kernel_type == "fast_uint8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel8_t>(probe_seq_type);
-    } else if (kernel_type == "fast_uint16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, fast_uint_kernel16_t>(probe_seq_type);
-    }
-  }
-
-  if constexpr (nvhm_bench_compile_kernels >= 40) {
-    if (kernel_type == "array1") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel1_t>(probe_seq_type);
-    } else if (kernel_type == "array2") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel2_t>(probe_seq_type);
-    } else if (kernel_type == "array4") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel4_t>(probe_seq_type);
-    } else if (kernel_type == "array8") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel8_t>(probe_seq_type);
-    } else if (kernel_type == "array16") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel16_t>(probe_seq_type);
-    } else if (kernel_type == "array32") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel32_t>(probe_seq_type);
-    } else if (kernel_type == "array64") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel64_t>(probe_seq_type);
-    } else if (kernel_type == "array128") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel128_t>(probe_seq_type);
-    } else if (kernel_type == "array256") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel256_t>(probe_seq_type);
-    } else if (kernel_type == "array512") {
-      return run_bench_nvhm_map_5<Key, Value, Flags, array_kernel512_t>(probe_seq_type);
-    }
-  }
-
-  throw std::runtime_error("Invalid kernel type: " + kernel_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_KERNELS`?");
+  std::ostringstream os;
+  os << "Invalid kernel type: " << kernel_type << ". Did you forget to compile with `NVHM_TOOLS_COMPILE_KERNELS`?";
+  throw std::runtime_error(os.str());
 }
 
 template <typename Key, typename Value, flags_t Flags>
-void run_bench_nvhm_map_3(const std::string& kernel_type, const std::string& probe_seq_type) {
+void run_bench_nvhm_map_3(kernel_type_t kernel_type, probe_seq_type_t probe_seq_type) {
   if (blob_size > 0) {
     run_bench_nvhm_map_4<Key, Value, Flags | flags_t::blobs>(kernel_type, probe_seq_type);
   } else {
@@ -1117,7 +1007,7 @@ void run_bench_nvhm_map_3(const std::string& kernel_type, const std::string& pro
 }
 
 template <typename Key, typename Value>
-void run_bench_nvhm_map_2(bool aggressive_prefetch, const std::string& kernel_type, const std::string& probe_seq_type) {
+void run_bench_nvhm_map_2(bool aggressive_prefetch, kernel_type_t kernel_type, probe_seq_type_t probe_seq_type) {
   if (aggressive_prefetch) {
     run_bench_nvhm_map_3<Key, Value, flags_t::aggressive_prefetch>(kernel_type, probe_seq_type);
   } else {
@@ -1126,7 +1016,7 @@ void run_bench_nvhm_map_2(bool aggressive_prefetch, const std::string& kernel_ty
 }
 
 template <typename Key>
-void run_bench_nvhm_map_1(bool aggressive_prefetch, const std::string& value_type, const std::string& kernel_type, const std::string& probe_seq_type) {
+void run_bench_nvhm_map_1(bool aggressive_prefetch, const std::string& value_type, kernel_type_t kernel_type, probe_seq_type_t probe_seq_type) {
   if (value_type == "time") {
     run_bench_nvhm_map_2<Key, time_t>(aggressive_prefetch, kernel_type, probe_seq_type);
   } else if (value_type == "void") {
@@ -1136,46 +1026,38 @@ void run_bench_nvhm_map_1(bool aggressive_prefetch, const std::string& value_typ
   }
 }
 
-void run_bench_nvhm_map_0(const std::string& key_type, bool aggressive_prefetch, const std::string& value_type, const std::string& kernel_type, const std::string& probe_seq_type) {
-  if (key_type == "int32") {
-    run_bench_nvhm_map_1<int32_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
-  } else if (key_type == "int64") {
-    run_bench_nvhm_map_1<int64_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
-  } else {
-    throw std::runtime_error("Invalid key type: " + key_type);
+void run_bench_nvhm_map_0(key_type_t key_type, bool aggressive_prefetch, const std::string& value_type, kernel_type_t kernel_type, probe_seq_type_t probe_seq_type) {
+  switch (key_type) {
+    case key_type_t::int32: return run_bench_nvhm_map_1<int32_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
+    case key_type_t::int64: return run_bench_nvhm_map_1<int64_t>(aggressive_prefetch, value_type, kernel_type, probe_seq_type);
   }
+  throw std::runtime_error("Unsupported `key_type`!");
 }
 
 template <typename Key, typename Value, bool HasBlobs, bool SerializeCopy>
-void run_bench_std_map_4(const std::string& map_type) {
-  if constexpr (nvhm_bench_compile_map_types >= 10) {
-    if (map_type == "nvhm_std_map_shim") {
-      return bench_std_map<std_map_shim<map<Key, std::byte*>>, Value, HasBlobs, SerializeCopy>();
-    }
-    if (map_type == "std_unordered_map") {
-      return bench_std_map<std::unordered_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
-    }
-  }
-
-  if constexpr (nvhm_bench_compile_map_types >= 20) {
-    if (map_type == "absl_flat_hash_map") {
-      return bench_std_map<absl::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
-    }
-    #if __cplusplus >= 202002L
-    if (map_type == "folly_f14_value_map") {
-      return bench_std_map<folly::F14ValueMap<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
-    }
+void run_bench_std_map_4(map_type_t map_type) {
+  switch (map_type) {
+    case map_type_t::nvhm_map: break;
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
+    case map_type_t::nvhm_std_map_shim: return bench_std_map<std_map_shim<map<Key, std::byte*>>, Value, HasBlobs, SerializeCopy>();
+    case map_type_t::std_unordered_map: return bench_std_map<std::unordered_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
     #endif
-    if (map_type == "phmap_flat_hash_map") {
-      return bench_std_map<phmap::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
-    }
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
+    case map_type_t::absl_flat_hash_map: return bench_std_map<absl::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
+    #if __cplusplus >= 202002L
+    case map_type_t::folly_f14_value_map: return bench_std_map<folly::F14ValueMap<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
+    #endif
+    case map_type_t::phmap_flat_hash_map: return bench_std_map<phmap::flat_hash_map<Key, std::byte*>, Value, HasBlobs, SerializeCopy>();
+    #endif
   }
 
-  throw std::runtime_error("Unsupported `map_type`: " + map_type + ". Did you forget to compile with `NVHM_BENCH_COMPILE_MAP_TYPES`?");
+  std::ostringstream os;
+  os << "Invalid map type: " << map_type << ". Did you forget to compile with `NVHM_TOOLS_COMPILE_MAP_TYPES`?";
+  throw std::runtime_error(os.str());
 }
 
 template <typename Map, typename Value, bool HasBlobs>
-void run_bench_std_map_3(bool serialize_copy, const std::string& map_type) {
+void run_bench_std_map_3(bool serialize_copy, map_type_t map_type) {
   if (serialize_copy) {
     run_bench_std_map_4<Map, Value, HasBlobs, true>(map_type);
   } else {
@@ -1184,7 +1066,7 @@ void run_bench_std_map_3(bool serialize_copy, const std::string& map_type) {
 }
 
 template <typename Map, typename Value>
-void run_bench_std_map_2(bool serialize_copy, const std::string& map_type) {
+void run_bench_std_map_2(bool serialize_copy, map_type_t map_type) {
   if (blob_size > 0) {
     run_bench_std_map_3<Map, Value, true>(serialize_copy, map_type);
   } else {
@@ -1193,7 +1075,7 @@ void run_bench_std_map_2(bool serialize_copy, const std::string& map_type) {
 }
 
 template <typename Key>
-void run_bench_std_map_1(const std::string& value_type, bool serialize_copy, const std::string& map_type) {
+void run_bench_std_map_1(const std::string& value_type, bool serialize_copy, map_type_t map_type) {
   if (value_type == "time") {
     run_bench_std_map_2<Key, time_t>(serialize_copy, map_type);
   } else if (value_type == "void") {
@@ -1204,37 +1086,12 @@ void run_bench_std_map_1(const std::string& value_type, bool serialize_copy, con
 }
 
 void run_bench_std_map_0(
-  const std::string& key_type, const std::string& value_type, bool serialize_copy, const std::string& map_type) {
-  if (key_type == "int32" ) {
-    run_bench_std_map_1<int32_t>(value_type, serialize_copy, map_type);
-  } else if (key_type == "int64") {
-    run_bench_std_map_1<int64_t>(value_type, serialize_copy, map_type);
-  } else {
-    throw std::runtime_error("Unsupported `key_type`!");
+  key_type_t key_type, const std::string& value_type, bool serialize_copy, map_type_t map_type) {
+  switch (key_type) {
+    case key_type_t::int32: return run_bench_std_map_1<int32_t>(value_type, serialize_copy, map_type);
+    case key_type_t::int64: return run_bench_std_map_1<int64_t>(value_type, serialize_copy, map_type);
   }
-}
-
-template <typename T>
-CLI::Validator make_set_validator(std::string name, const std::set<T>& values) {
-  std::ostringstream os;
-
-  os << name << '{';
-  const char* sep{""};
-  for (const auto& v : values) {
-    os << sep << v;
-    sep = "|";
-  }
-  os << '}';
-
-  return {
-    [values, name](const std::string& x) -> std::string {
-      if (values.find(x) != values.end()) {
-        return "";
-      }
-      return "Value " + x + " not in allowed for " + name + "!";
-    },
-    os.str()
-  };
+  throw std::runtime_error("Unsupported `key_type`!");
 }
 
 int main(int argc, char* argv[]) {
@@ -1245,108 +1102,37 @@ int main(int argc, char* argv[]) {
     {to_string(statistic_t::sum), statistic_t::sum},
     {to_string(statistic_t::mean), statistic_t::mean}
   };
-
-  const std::map<std::string, key_source_t> str_to_key_source{
-    {to_string(key_source_t::polynomial), key_source_t::polynomial},
-    {to_string(key_source_t::random), key_source_t::random}
-  };
   
   const std::map<std::string, queue_t> str_to_queue{
     {to_string(queue_t::shift), queue_t::shift},
     {to_string(queue_t::ring), queue_t::ring}
   };
 
-  const std::set<std::string> kernel_types{
-    #if NVHM_BENCH_COMPILE_KERNELS >= 10
-    "default1", "default2", "default4", "default8", "default16", "default32", "default64", "default128", "default256", "default512",
+  const std::map<std::string, map_type_t> str_to_map_type{
+    {to_string(map_type_t::nvhm_map), map_type_t::nvhm_map},
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
+    {to_string(map_type_t::nvhm_std_map_shim), map_type_t::nvhm_std_map_shim},
+    {to_string(map_type_t::std_unordered_map), map_type_t::std_unordered_map},
     #endif
-    #if NVHM_BENCH_COMPILE_KERNELS >= 20
-    #if NVHM_WITH_SSE >= 2
-    "sse",
-    #endif
-    #if NVHM_WITH_AVX >= 2
-    "avx",
-    #endif
-    #if NVHM_WITH_AVX512
-    "avx512",
-    #endif
-    #if NVHM_WITH_NEON
-    "neon8", "neon16", "neon32", "neon64",
-    #endif
-    #if NVHM_WITH_SVE
-    #if NVHM_WITH_SVE_SIZE >= 1
-    "sve1",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 2
-    "sve2",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 4
-    "sve4",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 8
-    "sve8",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 16
-    "sve16",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 32
-    "sve32",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 64
-    "sve64",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 128
-    "sve128",
-    #endif
-    #if NVHM_WITH_SVE_SIZE >= 256
-    "sve256",
-    #endif
-    #endif
-    #endif
-    #if NVHM_BENCH_COMPILE_KERNELS >= 30
-    "uint1", "uint2", "uint4", "uint8", "uint16",
-    "fast_uint1", "fast_uint2", "fast_uint4", "fast_uint8", "fast_uint16",
-    #endif
-    #if NVHM_BENCH_COMPILE_KERNELS >= 40
-    "array1", "array2", "array4", "array8", "array16", "array32", "array64", "array128", "array256", "array512",
-    #endif
-    "default"
-  };
-
-  const std::set<std::string> probe_seq_types{
-    #if NVHM_BENCH_COMPILE_PROBE_SEQS >= 10
-    "linear", "quadratic",
-    #endif
-    #if NVHM_BENCH_COMPILE_PROBE_SEQS >= 20
-    "aligned_linear", "aligned_quadratic",
-    #endif
-    "default"
-  };
-
-  const std::set<std::string> map_types{
-    #if NVHM_BENCH_COMPILE_MAP_TYPES >= 10
-    "nvhm_std_map_shim",
-    "std_unordered_map",
-    #endif
-    #if NVHM_BENCH_COMPILE_MAP_TYPES >= 20
-    "absl_flat_hash_map",
+    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
+    {to_string(map_type_t::absl_flat_hash_map), map_type_t::absl_flat_hash_map},
     #if __cplusplus >= 202002L
-    "folly_f14_value_map",
+    {to_string(map_type_t::folly_f14_value_map), map_type_t::folly_f14_value_map},
     #endif
-    "phmap_flat_hash_map",
+    {to_string(map_type_t::phmap_flat_hash_map), map_type_t::phmap_flat_hash_map},
     #endif
-    "nvhm_map"
   };
-  std::string key_type{"int64"};
+
+  key_type_t key_type{key_type_t::int64};
   bool aggressive_prefetch{true};
   std::string value_type{"time"};
-  std::string map_type{"nvhm_map"};
-  std::string kernel_type{"default"};
-  std::string probe_seq_type{"default"};
+  map_type_t map_type{map_type_t::nvhm_map};
+  kernel_type_t kernel_type{kernel_type_t::default_};
+  probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
   bool serialize_copy{false};
 
   app.add_option("--stat", stat, "The statistic to use for reporting")->default_str(to_string(stat))->transform(CLI::CheckedTransformer(str_to_statistic, CLI::ignore_case));
-  app.add_option("--key_type", key_type, "Key type (int32 | int64)")->default_val(key_type);
+  app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
   app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
   app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
@@ -1367,9 +1153,9 @@ int main(int argc, char* argv[]) {
   app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->default_val(max_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--check_blobs", check_blobs, "Check blobs")->default_val(check_blobs);
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
-  app.add_option("--map_type", map_type, "Map type")->default_str(map_type)->check(make_set_validator("MAP_TYPE", map_types));
-  app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(kernel_type)->check(make_set_validator("KERNEL_TYPE", kernel_types));
-  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(probe_seq_type)->check(make_set_validator("PROBE_SEQ_TYPE", probe_seq_types));
+  app.add_option("--map_type", map_type, "Map type")->default_str(to_string(map_type))->transform(CLI::CheckedTransformer(str_to_map_type, CLI::ignore_case));
+  app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
+  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));
   app.add_option("--serialize_copy", serialize_copy, "Serialize copy")->default_val(serialize_copy);
 
   argv = app.ensure_utf8(argv);
@@ -1417,7 +1203,7 @@ int main(int argc, char* argv[]) {
     throw std::runtime_error("`max_insert_queue_len - min_insert_queue_len` must be = 1!");
   }
 
-  if (map_type == "nvhm_map") {
+  if (map_type == map_type_t::nvhm_map) {
     run_bench_nvhm_map_0(key_type, aggressive_prefetch, value_type, kernel_type, probe_seq_type);
   } else {
     run_bench_std_map_0(key_type, value_type, serialize_copy, map_type);
