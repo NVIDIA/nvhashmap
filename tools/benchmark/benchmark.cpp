@@ -160,17 +160,14 @@ NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It
     }
   }
   
-  if (!success) {
-    return {std::chrono::milliseconds::zero(), -1};
+  if (success) {
+    switch (stat) {
+      case statistic_t::max: return {time, count};
+      case statistic_t::sum: return {time, count};
+      case statistic_t::mean: return {time / num_workers, count};
+    }
   }
-  switch (stat) {
-    case statistic_t::max:
-      return {time, count};
-    case statistic_t::sum:
-      return {time, count};
-    case statistic_t::mean:
-      return {time / num_workers, count};
-  }
+  return {std::chrono::milliseconds::zero(), -1};
 }
 
 int_t blob_size{256};
