@@ -142,17 +142,42 @@ class worker {
   std::thread thread_;
 };
 
+enum class statistic_t {
+  max,
+  mean,
+  sum
+};
+
+constexpr const char* to_string(statistic_t s) {
+  switch (s) {
+    case statistic_t::max: return "max";
+    case statistic_t::sum: return "sum";
+    case statistic_t::mean: return "mean";
+  }
+  return "error";
+}
+
+inline std::ostream& operator<<(std::ostream& os, statistic_t s) {
+  return os << to_string(s);
+}
+
+static statistic_t stat{statistic_t::max};
+
 template <typename It>
 NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It begin, It last) {
   int_t num_workers{last - begin};
 
   bool success{true};
-  std::chrono::milliseconds max{};
+  std::chrono::milliseconds time{};
   int_t count{};
   for (; begin != last; ++begin) {
     begin->join();
 
-    max = std::max(max, begin->time());
+    if (stat == statistic_t::max) {
+      time = std::max(time, begin->time());
+    } else {
+      time += begin->time();
+    }
     count += begin->count();
 
     if (!begin->status()) {
@@ -164,7 +189,14 @@ NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It
   if (!success) {
     return {std::chrono::milliseconds::zero(), -1};
   }
-  return {max / num_workers, count};
+  switch (stat) {
+    case statistic_t::max:
+      return {time, count};
+    case statistic_t::sum:
+      return {time, count};
+    case statistic_t::mean:
+      return {time / num_workers, count};
+  }
 }
 
 static int_t blob_size{256};
@@ -1208,6 +1240,12 @@ CLI::Validator make_set_validator(std::string name, const std::set<T>& values) {
 int main(int argc, char* argv[]) {
   CLI::App app{"NVHashmap Benchmark"};
 
+  const std::map<std::string, statistic_t> str_to_statistic{
+    {to_string(statistic_t::max), statistic_t::max},
+    {to_string(statistic_t::sum), statistic_t::sum},
+    {to_string(statistic_t::mean), statistic_t::mean}
+  };
+
   const std::map<std::string, key_source_t> str_to_key_source{
     {to_string(key_source_t::polynomial), key_source_t::polynomial},
     {to_string(key_source_t::random), key_source_t::random}
@@ -1307,6 +1345,7 @@ int main(int argc, char* argv[]) {
   std::string probe_seq_type{"default"};
   bool serialize_copy{false};
 
+  app.add_option("--stat", stat, "The statistic to use for reporting")->default_str(to_string(stat))->transform(CLI::CheckedTransformer(str_to_statistic, CLI::ignore_case));
   app.add_option("--key_type", key_type, "Key type (int32 | int64)")->default_val(key_type);
   app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
@@ -1337,6 +1376,7 @@ int main(int argc, char* argv[]) {
   CLI11_PARSE(app, argc, argv);
 
   std::cerr << argv[0] << " \\\n";
+  std::cerr << "  --stat " << stat << " \\\n";
   std::cerr << "  --key_type " << key_type << " \\\n";
   std::cerr << "  --num_keys " << num_keys << " \\\n";
   std::cerr << "  --key_source " << key_source << " \\\n";
