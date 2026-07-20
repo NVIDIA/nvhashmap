@@ -27,6 +27,9 @@ target_link_libraries(test_kernels GTest::gtest_main)
 add_executable(test_memory test_memory.cpp)
 target_link_libraries(test_memory GTest::gtest_main)
 
+add_executable(test_mutex test_mutex.cpp)
+target_link_libraries(test_mutex GTest::gtest_main)
+
 add_executable(test_probe_seq test_probe_seq.cpp)
 target_link_libraries(test_probe_seq GTest::gtest_main)
 
