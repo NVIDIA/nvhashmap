@@ -169,6 +169,18 @@ class cache : public swiss_map_base<
 
   constexpr int_t clear_() noexcept { return reset_(); }
 
+  constexpr void count_kernel_populations_(std::array<int_t, kernel_size + 1>& counts) const noexcept {
+    const raw_pos_t end{capacity()};
+    const state_t* const __restrict states{states_()};
+
+    for (raw_pos_t off{}; off < end; off += kernel_size) {
+      auto k{kernel_type::load(&states[off * 2])};
+      auto m{kernel_type::mask_hash(k)};
+
+      ++counts[to_uint(mask_type::count(m))];
+    }
+  }
+
   constexpr void count_state_collisions_(std::array<int_t, kernel_size>& counts) const noexcept {
     const raw_pos_t end{capacity()};
     const state_t* const __restrict states{states_()};
@@ -208,9 +220,12 @@ class cache : public swiss_map_base<
 
   template <typename PS>
   NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) {
-    static_assert(test_flags(flags, flags_t::duplicates), "Only permissible in containers that allow `duplicate` keys!");
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    if constexpr (!test_flags(flags, flags_t::duplicates)) {
+      return {false, npos, std::move(seq)};
+    }
 
     const bitmask_t bucket_mask{bucket_mask_};
     const key_type* const __restrict keys{keys_.get()};
@@ -343,9 +358,12 @@ class cache : public swiss_map_base<
 
   template <typename PS>
   NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) const {
-    static_assert(test_flags(flags, flags_t::duplicates), "Only permissible in containers that allow `duplicate` keys!");
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
+
+    if constexpr (!test_flags(flags, flags_t::duplicates)) {
+      return {npos, std::move(seq)};
+    }
 
     const bitmask_t bucket_mask{bucket_mask_};
     const key_type* const __restrict keys{keys_.get()};

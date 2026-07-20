@@ -20,7 +20,20 @@
 
 using namespace nvhm;
 
-int main() {
-  using cache_t = cache<dummy_key, dummy_value, flags_t::all>;
+template <flags_t Flags>
+int compile_cache() {
+  using cache_t = cache<dummy_key, dummy_value, Flags>;
   return compile_map<false, cache_t>();
+}
+
+int main() {
+  int i{};
+  i += compile_cache<flags_t::none>();
+  i += compile_cache<flags_t::blobs>();
+  i += compile_cache<flags_t::duplicates>();
+  i += compile_cache<flags_t::aggressive_prefetch>();
+  i += compile_cache<flags_t::auto_scrub>();
+  i += compile_cache<flags_t::auto_shrink>();
+  i += compile_cache<flags_t::all>();
+  return i;
 }
