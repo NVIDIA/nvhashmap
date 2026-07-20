@@ -176,7 +176,7 @@ class map : public swiss_map_base<
     return mask_type::count(kernel_type::mask_tombstone(k));
   }
 
-  constexpr bool check_integrity_() const noexcept {
+  NVHM_ALWAYS_INLINE constexpr bool check_integrity_() const noexcept {
     const int_t end{capacity()};
     const state_t* const __restrict states{states_.get()};
     
@@ -196,7 +196,7 @@ class map : public swiss_map_base<
     return num_empty == num_empty_ && num_tombstone == num_tombstone_;
   }
 
-  constexpr int_t clear_() {
+  NVHM_ALWAYS_INLINE constexpr int_t clear_() {
     if constexpr (test_flags(flags, flags_t::auto_shrink)) {
       int_t end{conf_.init_capacity()};
       if (end != capacity()) {
@@ -207,7 +207,7 @@ class map : public swiss_map_base<
     return reset_();
   }
 
-  constexpr void count_kernel_populations_(std::array<int_t, kernel_size + 1>& counts) const noexcept {
+  NVHM_ALWAYS_INLINE constexpr void count_kernel_populations_(int_t* const __restrict counts) const noexcept {
     const raw_pos_t end{capacity()};
     const state_t* const __restrict states{states_.get()};
 
@@ -215,11 +215,11 @@ class map : public swiss_map_base<
       auto k{kernel_type::load(&states[off])};
       auto m{kernel_type::mask_hash(k)};
 
-      ++counts[to_uint(mask_type::count(m))];
+      ++counts[mask_type::count(m)];
     }
   }
 
-  constexpr void count_state_collisions_(std::array<int_t, kernel_size>& counts) const noexcept {
+  NVHM_ALWAYS_INLINE constexpr void count_state_collisions_(std::array<int_t, kernel_size>& counts) const noexcept {
     const raw_pos_t end{capacity()};
     const state_t* const __restrict states{states_.get()};
 
@@ -228,7 +228,7 @@ class map : public swiss_map_base<
     }
   }
 
-  constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(const key_type& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(const key_type& __restrict key, const hash_t hash) {
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
     const bitmask_t bucket_mask{bucket_mask_};
