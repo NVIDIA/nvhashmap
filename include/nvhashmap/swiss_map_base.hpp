@@ -105,7 +105,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param counts An array of size `kernel_type::size + 1` containing the population distribution. Not zeroed before use.
    */
   constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const noexcept {
-    self()->count_kernel_populations_(counts);
+    self()->count_kernel_populations_(counts.data());
   }
 
   /**
@@ -114,7 +114,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param counts An array of size `kernel_type::size` containing the number of collision distribution. Not zeroed before use.
    */
   constexpr void count_state_collisions(std::array<int_t, kernel_size>& counts) const noexcept {
-    self()->count_state_collisions_(counts);
+    self()->count_state_collisions_(counts.data());
   }
 
   /**
