@@ -15,12 +15,9 @@
  * limitations under the License.
  */
 
+#include <nvhashmap/common.hpp>
 #include "test_common.hpp"
 #include <gtest/gtest.h>
-#include <iomanip>
-#include <nvhashmap/common.hpp>
-#include <nvhashmap/stdlib_ext.hpp>
-#include <random>
 
 using namespace nvhm;
 

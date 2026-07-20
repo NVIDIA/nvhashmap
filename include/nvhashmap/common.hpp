@@ -416,12 +416,12 @@ using psl_t = int_t;
 
 constexpr static psl_t inf_psl{std::numeric_limits<psl_t>::max()};
 
-template<class InOutIt, class Size, class UnaryOp>
+template<typename InOutIt, typename Size, typename UnaryOp>
 constexpr InOutIt transform_n(InOutIt first, Size n, UnaryOp f) {
   return std::transform(first, first + n, first, f);
 }
 
-template<class InIt0, class InIt1, class Size>
+template<typename InIt0, typename InIt1, typename Size>
 constexpr bool equal_n(InIt0 first0, InIt1 first1, Size n) {
   return std::equal(first0, first0 + n, first1);
 }
