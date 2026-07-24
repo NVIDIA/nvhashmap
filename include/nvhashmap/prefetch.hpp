@@ -32,22 +32,10 @@ constexpr void shift(T (&__restrict arr)[Capacity]) noexcept {
   }
 }
 
-enum class queue_t : int_t {
+NVHM_MAKE_ENUM_(queue_t,
   shift,
   ring
-};
-
-constexpr std::string to_string(queue_t type) {
-  switch (type) {
-    case queue_t::shift: return "shift";
-    case queue_t::ring: return "ring";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, queue_t type) {
-  return os << to_string(type);
-}
+);
 
 template <typename Self, queue_t Type, typename Key, typename Value, int_t Capacity>
 class alignas(cache_line_size) prefetch_queue : public self_aware<Self> {

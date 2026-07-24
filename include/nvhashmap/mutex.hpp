@@ -26,13 +26,54 @@
 
 namespace nvhm {
 
+namespace detail {
+
+// Check whether the type has `downgrade` member.
+template <typename T, typename = void>
+struct has_downgrade : std::false_type {};
+
+template <typename T>
+struct has_downgrade<T, std::void_t<decltype(std::declval<T&>().downgrade())>> : std::true_type {};
+
+// Check whether the type has `try_upgrade` member.
+template <typename T, typename = void>
+struct has_try_upgrade : std::false_type {};
+
+template <typename T>
+struct has_try_upgrade<T, std::void_t<decltype(std::declval<T&>().try_upgrade())>> : std::true_type {};
+
+// Return type itself, unless it has a mutex_type embedded.
+template <typename T, typename = void>
+struct mutex_type_of {
+  using type = T;
+};
+
+template <typename T>
+struct mutex_type_of<T, std::void_t<typename T::mutex_type>> {
+  using type = typename T::mutex_type;
+};
+
+}  // namespace detail
+
+template <typename T>
+struct is_downgradable : detail::has_downgrade<typename detail::mutex_type_of<std::remove_cv_t<T>>::type> {};
+
+template <typename T>
+constexpr bool is_downgradable_v{is_downgradable<T>::value};
+
+template <typename T>
+struct is_upgradable : detail::has_try_upgrade<typename detail::mutex_type_of<std::remove_cv_t<T>>::type> {};
+
+template <typename T>
+constexpr bool is_upgradable_v{is_upgradable<T>::value};
+
 /**
  * Consume `unique_lock` and construct a `shared_lock` through downgrading.
  *
  * @param lock The `unique_lock`.
  * @returns The `shared_lock`.
  */
-template <typename Mutex>
+template <typename Mutex, bool AllowRelock>
 [[nodiscard]] NVHM_ALWAYS_INLINE std::shared_lock<Mutex> downgrade(std::unique_lock<Mutex>&& lock) noexcept {
   Mutex* m{lock.mutex()};
   if (!m) {
@@ -46,8 +87,26 @@ template <typename Mutex>
     return {*m, std::defer_lock};
   }
 
-  m->downgrade();
+  if constexpr (is_downgradable_v<Mutex>) {
+    m->downgrade();
+  } else if constexpr (AllowRelock) {
+    NVHM_LOG_(log_level_t::info, "`Mutex` doesn't support downgrading. Attempting unlock and re-lock.");
+    m->unlock();
+    m->lock_shared();
+  } else {
+    static_assert(dependent_false_v<Mutex>, "Unsupported operation!");
+  }
   return {*m, std::adopt_lock};
+}
+
+template <typename Mutex>
+[[nodiscard]] NVHM_ALWAYS_INLINE std::shared_lock<Mutex> downgrade(std::unique_lock<Mutex>&& lock) noexcept {
+  return downgrade<Mutex, false>(std::move(lock));
+}
+
+template <typename Mutex>
+[[nodiscard]] NVHM_ALWAYS_INLINE std::shared_lock<Mutex> downgrade_or_relock(std::unique_lock<Mutex>&& lock) noexcept {
+  return downgrade<Mutex, true>(std::move(lock));
 }
 
 /**
@@ -62,7 +121,7 @@ template <typename Mutex>
  * @returns The `unique_lock`.
  */
 template <typename Mutex>
-[[nodiscard]] NVHM_ALWAYS_INLINE std::unique_lock<Mutex> upgrade(std::shared_lock<Mutex>&& lock) noexcept {
+[[nodiscard]] NVHM_ALWAYS_INLINE std::unique_lock<Mutex> upgrade_or_relock(std::shared_lock<Mutex>&& lock) noexcept {
   Mutex* m{lock.mutex()};
   if (!m) {
     return {};
@@ -75,8 +134,14 @@ template <typename Mutex>
     return {*m, std::defer_lock};
   }
 
-  if (!m->try_upgrade()) {
-    NVHM_LOG_(log_level_t::info, "Direct lock upgrade failed. Attempting to re-lock.");
+  if constexpr (is_upgradable_v<Mutex>) {
+    if (!m->try_upgrade()) {
+      NVHM_LOG_(log_level_t::info, "Direct lock upgrade failed. Too many readers! Attempting unlock and re-lock.");
+      m->unlock_shared();
+      m->lock();
+    }
+  } else {
+    NVHM_LOG_(log_level_t::info, "`Mutex` doesn't support upgrading. Attempting unlock and re-lock.");
     m->unlock_shared();
     m->lock();
   }
@@ -91,12 +156,13 @@ template <typename Mutex>
  */
 template <typename Mutex>
 [[nodiscard]] NVHM_ALWAYS_INLINE std::optional<std::unique_lock<Mutex>> try_upgrade(std::shared_lock<Mutex>& lock) noexcept {
-  Mutex* m{lock.mutex()};
-  if (m && lock.owns_lock() && m->try_upgrade()) {
-    lock.release();
-    return std::unique_lock<Mutex>{*m, std::adopt_lock};
+  if constexpr (is_upgradable_v<Mutex>) {
+    Mutex* m{lock.mutex()};
+    if (m && lock.owns_lock() && m->try_upgrade()) {
+      lock.release();
+      return std::unique_lock<Mutex>{*m, std::adopt_lock};
+    }
   }
-
   return std::nullopt;
 }
 
@@ -128,14 +194,16 @@ NVHM_ALWAYS_INLINE void backoff() noexcept {
 
 }  // namespace detail
 
-constexpr static int_t mutex_default_spin_iterations{32};
-constexpr static int_t mutex_default_min_back_off{8};
-#if defined(__cpp_lib_atomic_wait)
-constexpr static int_t mutex_default_use_wait{true};
-#else
-constexpr static int_t mutex_default_use_wait{false};
-#endif
-constexpr static int_t mutex_default_max_back_off{32};
+constexpr bool mutex_default_use_wait{
+  #if defined(__cpp_lib_atomic_wait)
+  true
+  #else
+  false
+  #endif
+};
+constexpr int_t mutex_default_spin_iterations{64};
+constexpr int_t mutex_default_max_back_off{32};
+constexpr int_t mutex_default_min_back_off{8};
 
 /**
  * A mutex that uses a spin loop to acquire locks. If the lock is not acquired after a certain
@@ -319,7 +387,5 @@ class spin_wait_mutex {
  protected:
   std::atomic<state_type> state_;
 };
-
-using spin_wait_mutex_t = spin_wait_mutex<>;
 
 }  // namespace nvhm

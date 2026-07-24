@@ -307,48 +307,18 @@ class wrapped_map_iterator : public wrapped_iterator<Self, Inner, typename Inner
   constexpr explicit wrapped_map_iterator(inner_type&& inner) noexcept : base_type{std::move(inner)} {}
 };
 
-enum class insert_op_t : int_t {
-  reject = 0,
-  found = 1,
-  insert = 2,
-  replace = 3,
-};
+NVHM_MAKE_ENUM_(insert_op_t,
+  reject,
+  found,
+  insert,
+  replace
+);
 
-constexpr const char* to_string(insert_op_t op) {
-  switch (op) {
-    case insert_op_t::reject:
-      return "reject";
-    case insert_op_t::found:
-      return "found";
-    case insert_op_t::insert:
-      return "insert";
-    case insert_op_t::replace:
-      return "replace";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, insert_op_t op) { return os << to_string(op); }
-
-enum class blob_render_t : int_t {
-  hide = 0,
-  size = 1,
-  full = 2,
-};
-
-constexpr const char* to_string(blob_render_t br) {
-  switch (br) {
-    case blob_render_t::hide:
-      return "hide";
-    case blob_render_t::size:
-      return "size";
-    case blob_render_t::full:
-      return "full";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, blob_render_t br) { return os << to_string(br); }
+NVHM_MAKE_ENUM_(blob_render_t,
+  hide,
+  size,
+  full
+);
 
 template <typename Self, typename Key, typename Value>
 class nested_container : public self_aware<Self> {

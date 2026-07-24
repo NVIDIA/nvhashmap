@@ -1,15 +1,15 @@
 #!/bin/bash
 
-BENCH_CMD="numactl -N 0 -m 0 ./tools/benchmark/benchmark"
+BENCH_CMD="numactl -N 0 -m 0 ./tools/benchmark/map_benchmark"
 
-NUM_KEYS=50000000
+NUM_KEYS=5000000
 KEY_SOURCE=polynomial
-KEY_C0=13
-KEY_C1=3
-KEY_C2=7
+KEY_POLY=13,3,7
 SEED=1337
+PRINT_HEADER=1
 
-KEY_SETUP="--num_keys $NUM_KEYS --key_source $KEY_SOURCE --key_c0 $KEY_C0 --key_c1 $KEY_C1 --key_c2 $KEY_C2 --seed $SEED"
+KEY_SETUP="--num_keys $NUM_KEYS --key_source $KEY_SOURCE --key_poly $KEY_POLY --seed $SEED"
+MAP_SETUP="--print_header $PRINT_HEADER"
 
 
 # Insert
@@ -21,11 +21,13 @@ SETUP="$SETUP --num_insert_trials $NUM_INSERT_TRIALS --num_find_trials $NUM_FIND
 SETUP="$SETUP --insert_queue_type shift --max_find_queue_len 0"
 
 $BENCH_CMD --map_type "nvhm_map" --num_workers 1 $SETUP\
-  --max_insert_queue_len 3
+  --max_insert_queue_len 3 --print_header $PRINT_HEADER
+PRINT_HEADER=0
 
 for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
   $BENCH_CMD --map_type $map_type --num_workers 1 $SETUP\
-    --max_insert_queue_len 0
+    --max_insert_queue_len 0 --print_header $PRINT_HEADER
+  PRINT_HEADER=0
 done
 
 
@@ -44,11 +46,13 @@ for perc_qlen in "100 6" "50 12" "10 24" "1 28"; do
   perc=$1
   qlen=$2
   $BENCH_CMD --map_type nvhm_map --num_workers 1 $SETUP\
-    --find_keep_perc $perc --max_find_queue_len $qlen
+    --find_hit_perc $perc --max_find_queue_len $qlen --print_header $PRINT_HEADER
+  PRINT_HEADER=0
 
   for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
     $BENCH_CMD --map_type $map_type --num_workers 1 $SETUP\
-      --find_keep_perc $perc --max_find_queue_len 0
+      --find_hit_perc $perc --max_find_queue_len 0 --print_header $PRINT_HEADER
+    PRINT_HEADER=0
   done
 done
 
@@ -58,10 +62,12 @@ for perc_qlen in "100 4" "50 6" "10 16" "1 20"; do
   perc=$1
   qlen=$2
   $BENCH_CMD --map_type nvhm_map --num_workers 8 $SETUP\
-    --find_keep_perc $perc --max_find_queue_len $qlen
+    --find_hit_perc $perc --max_find_queue_len $qlen --print_header $PRINT_HEADER
+  PRINT_HEADER=0
 
   for map_type in "nvhm_std_map_shim" "std_unordered_map" "absl_flat_hash_map" "folly_f14_value_map" "phmap_flat_hash_map"; do
     $BENCH_CMD --map_type $map_type --num_workers 8 $SETUP\
-      --find_keep_perc $perc --max_find_queue_len 0
+      --find_hit_perc $perc --max_find_queue_len 0 --print_header $PRINT_HEADER
+    PRINT_HEADER=0
   done
 done

@@ -432,7 +432,7 @@ void test_mutex_std_lock_upgrade(const int_t num_iter = 8) {
     EXPECT_EQ(l0.mutex(), nullptr);
     EXPECT_FALSE(l0.owns_lock());
 
-    std::unique_lock<mutex_t> l1{upgrade(std::move(l0))};
+    std::unique_lock<mutex_t> l1{upgrade_or_relock(std::move(l0))};
     EXPECT_EQ(l0.mutex(), nullptr);
     EXPECT_FALSE(l0.owns_lock());
     EXPECT_EQ(l1.mutex(), nullptr);
@@ -449,7 +449,7 @@ void test_mutex_std_lock_upgrade(const int_t num_iter = 8) {
     EXPECT_EQ(l0.mutex(), &m);
     EXPECT_FALSE(l0.owns_lock());
 
-    std::unique_lock<mutex_t> l1{upgrade(std::move(l0))};
+    std::unique_lock<mutex_t> l1{upgrade_or_relock(std::move(l0))};
     EXPECT_FALSE(m.is_locked());
     EXPECT_EQ(m.num_shared_locks(), 0);
     EXPECT_EQ(l0.mutex(), nullptr);
@@ -468,7 +468,7 @@ void test_mutex_std_lock_upgrade(const int_t num_iter = 8) {
     EXPECT_EQ(l0.mutex(), &m);
     EXPECT_TRUE(l0.owns_lock());
 
-    std::unique_lock<mutex_t> l1{upgrade(std::move(l0))};
+    std::unique_lock<mutex_t> l1{upgrade_or_relock(std::move(l0))};
     EXPECT_TRUE(m.is_locked());
     EXPECT_EQ(m.num_shared_locks(), 0);
     EXPECT_EQ(l0.mutex(), nullptr);
@@ -491,7 +491,7 @@ void test_mutex_std_lock_upgrade(const int_t num_iter = 8) {
 
     std::unique_lock<mutex_t> l2;
     std::thread t{[&]() {
-      l2 = upgrade(std::move(l0));
+      l2 = upgrade_or_relock(std::move(l0));
       EXPECT_EQ(l0.mutex(), nullptr);
       EXPECT_FALSE(l0.owns_lock());
       EXPECT_EQ(l1.mutex(), &m);
@@ -762,6 +762,7 @@ using spin_mutex_2_t = spin_wait_mutex<int16_t, 1, false>;
 using spin_mutex_4_t = spin_wait_mutex<int32_t, 1, false>;
 using spin_mutex_8_t = spin_wait_mutex<int64_t, 1, false>;
 
+#if defined(__cpp_lib_atomic_wait)
 using wait_mutex_1_t = spin_wait_mutex<int8_t, 0, true>;
 using wait_mutex_2_t = spin_wait_mutex<int16_t, 0, true>;
 using wait_mutex_4_t = spin_wait_mutex<int32_t, 0, true>;
@@ -772,10 +773,10 @@ using spin_wait_mutex_spin_1_t = spin_wait_mutex<int8_t, 1, true>;
 using spin_wait_mutex_spin_2_t = spin_wait_mutex<int16_t, 1, true>;
 using spin_wait_mutex_spin_4_t = spin_wait_mutex<int32_t, 1, true>;
 using spin_wait_mutex_spin_8_t = spin_wait_mutex<int64_t, 1, true>;
+#endif
 
 NVHM_FOR_EACH_(
   EVAL_MUTEX_TESTS_,
-  spin_wait_mutex_t,
   spin_wait_mutex_1_t,
   spin_wait_mutex_2_t,
   spin_wait_mutex_4_t,
@@ -783,9 +784,16 @@ NVHM_FOR_EACH_(
   spin_mutex_1_t,
   spin_mutex_2_t,
   spin_mutex_4_t,
-  spin_mutex_8_t,
+  spin_mutex_8_t
+  #if defined(__cpp_lib_atomic_wait)
+  ,
   wait_mutex_1_t,
   wait_mutex_2_t,
   wait_mutex_4_t,
-  wait_mutex_8_t
+  wait_mutex_8_t,
+  spin_wait_mutex_spin_1_t,
+  spin_wait_mutex_spin_2_t,
+  spin_wait_mutex_spin_4_t,
+  spin_wait_mutex_spin_8_t
+  #endif
 );

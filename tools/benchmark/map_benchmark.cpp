@@ -41,29 +41,9 @@
 #endif
 
 using namespace nvhm;
-#include "../utils.hpp"
+#include "../tools_common.hpp"
 
-class stopwatch {
-  public:
-   inline stopwatch() : begin_(std::chrono::high_resolution_clock::now()) {}
-   
-   inline auto elapsed() const {
-     return std::chrono::high_resolution_clock::now() - begin_;
-   }
- 
-   inline std::chrono::milliseconds elapsed_ms() const {
-     return std::chrono::duration_cast<std::chrono::milliseconds>(elapsed());
-   }
- 
-   inline friend std::ostream& operator<<(std::ostream& os, const stopwatch& c) {
-     return os << c.elapsed_ms();
-   }
- 
-  private:
-   std::chrono::high_resolution_clock::time_point begin_;
- };
- 
-std::atomic_int64_t num_workers_ready;
+std::atomic<int_t> num_workers_ready;
 
 class worker {
  public:
@@ -116,24 +96,11 @@ class worker {
   std::thread thread_;
 };
 
-enum class statistic_t {
+NVHM_MAKE_ENUM_WITH_VALIDATOR_(statistic_t,
   max,
   mean,
   sum
-};
-
-constexpr const char* to_string(statistic_t s) {
-  switch (s) {
-    case statistic_t::max: return "max";
-    case statistic_t::sum: return "sum";
-    case statistic_t::mean: return "mean";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, statistic_t s) {
-  return os << to_string(s);
-}
+);
 
 statistic_t stat{statistic_t::max};
 
@@ -170,7 +137,7 @@ NVHM_NO_INLINE std::pair<std::chrono::milliseconds, int_t> accumulate_workers(It
   return {std::chrono::milliseconds::zero(), -1};
 }
 
-int_t blob_size{256};
+int_t blob_size{120};
 
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob) {
@@ -463,18 +430,19 @@ NVHM_NO_INLINE std::pair<bool, int_t> do_find_std(worker& __restrict w, int_t ba
 
 int_t num_keys{50'000'000};
 key_source_t key_source{key_source_t::polynomial};
-int_t key_c[]{13, 3, 7};
+std::array<int_t, 3> key_poly{13, 3, 7};
 int_t num_workers{8};
 int_t num_insert_trials{5};
 queue_t insert_queue_type{queue_t::ring};
 int_t min_insert_queue_len{0};
 int_t max_insert_queue_len{0};
 int_t num_find_trials{5};
-int_t find_keep_perc{100};
+int_t find_hit_perc{100};
 queue_t find_queue_type{queue_t::ring};
 int_t min_find_queue_len{0};
 int_t max_find_queue_len{0};
 std::size_t seed{rd()};
+int_t map_type_print_len{120};
 
 template <typename Map>
 NVHM_NO_INLINE void bench_nvhm_map() {
@@ -486,16 +454,17 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   if (num_workers < 1 || num_workers > 1024) {
     throw std::runtime_error("`num_workers` is out of bounds!");
   }
-  if (find_keep_perc < 0 || find_keep_perc > 100) {
+  if (find_hit_perc < 0 || find_hit_perc > 100) {
     throw std::runtime_error("`prune_perc` is out of bounds!");
   }
   if (worker::scratch_buf_size < blob_size) {
     throw std::runtime_error("`scratch_buf_size` is too small!");
   }
  
-  std::string map_type{type_to_string<map_t>()};
-  map_type.erase(std::remove_if(map_type.begin(), map_type.end(), [](unsigned char c){ return std::isspace(c); }), map_type.end());
-  std::replace(map_type.begin(), map_type.end(), ',', '|');
+  static std::string map_type{type_to_string<map_t>()};
+  if (map_type.size() > to_uint(map_type_print_len)) {
+    map_type.resize(to_uint(map_type_print_len));
+  }
   std::mt19937_64 rng{seed};
  
   // Initialize key and data buffers.
@@ -505,7 +474,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
     workers.emplace_back(i);
   }
   
-  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
+  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_poly, rng)};
 
   std::vector<char> blobs;
   conf_t conf{};
@@ -524,8 +493,13 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   // Insert
   for (int_t queue_len{min_insert_queue_len}; queue_len < max_insert_queue_len; ++queue_len) {
     if (num_insert_trials > 0) {
-      std::cout << map_type << ", " << std::setw(10) << "Worker " << 1 << ", Insert " << 100 << "% (" << insert_queue_type << ' ' << std::setw(2) << queue_len << "): ";
-      std::cout.flush();
+      std::cout
+        << "| "
+        << std::left << std::setw(static_cast<int>(map_type_print_len)) << map_type << " | "
+        << std::right << std::setw(4) << 1 << " | "
+        << std::left << std::setw(6) << "insert" << " | "
+        << std::right << std::setw(4) << 100 << " | " << std::setw(5) << insert_queue_type << " | " << std::setw(4) << queue_len
+        << std::flush;
     }
  
     int_t total_count{};
@@ -583,14 +557,13 @@ NVHM_NO_INLINE void bench_nvhm_map() {
         workers[0].assign(fn);
         auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
         if (num_insert_trials > 0) {
-          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-          std::cout.flush();
+          std::cout << " | " << std::setw(5) << ms.count() << std::flush;
         }
         total_count += count;
       }
     }
     if (num_insert_trials > 0) {
-      std::cout << ", size: " << map.size() << " / " << map.capacity() << " [ " << total_count << " ]" << '\n';
+      std::cout << " | " << std::setw(10) << map.size() << " | " << std::setw(10) << map.capacity() << " | " << std::setw(12) << total_count << " |\n";
     }
   }
   if (!map.check_integrity()) {
@@ -602,20 +575,19 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   std::vector<int_t> indexes(keys.size());
   std::iota(indexes.begin(), indexes.end(), 0);
   std::shuffle(indexes.begin(), indexes.end(), rng);
- 
-  std::cerr << "\nmap size after pruning: " << map.size();
+  
   std::vector<bool> should_exist(keys.size());
   for (int_t i{}; i < to_int(indexes.size()); ++i) {
     int_t idx{indexes[to_uint(i)]};
-    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+    if (i < to_int(indexes.size()) * find_hit_perc / 100) {
       should_exist[to_uint(idx)] = true;
     } else {
       should_exist[to_uint(idx)] = false;
       map.erase(keys[to_uint(idx)]);
     }
   }
-  std::cerr << " -> " << map.size() << '\n';
   if (!map.check_integrity()) {
+    std::cerr << "\nmap size after pruning: " << map.size() << " -> " << map.size() << '\n' << std::flush;
     throw std::runtime_error("Map integrity check failed!");
   }
  
@@ -625,8 +597,13 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   // Find
   for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
     if (num_find_trials > 0) {
-      std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit (" << find_queue_type << ' ' << std::setw(2) << queue_len << "): ";
-      std::cout.flush();
+      std::cout
+        << "| "
+        << std::left << std::setw(static_cast<int>(map_type_print_len)) << map_type << " | "
+        << std::right << std::setw(4) << num_workers << " | "
+        << std::left << std::setw(6) << "find" << " | "
+        << std::right << std::setw(4) << find_hit_perc << " | " << std::setw(5) << find_queue_type << " | " << std::setw(4) << queue_len
+        << std::flush;
     }
 
     int_t total_count{};
@@ -684,13 +661,12 @@ NVHM_NO_INLINE void bench_nvhm_map() {
           workers[to_uint(w)].assign(fn);
         }
         auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
+        std::cout << " | " << std::setw(5) << ms.count() << std::flush;
         total_count += count;
       }
     }
     if (num_find_trials > 0) {
-      std::cout << " [ " << total_count << " ]\n";
+      std::cout << " | " << std::setw(10) << map.size() << " | " << std::setw(10) << map.capacity() << " | " << std::setw(12) << total_count << " |\n";
     }
   }
 }
@@ -716,9 +692,10 @@ NVHM_NO_INLINE void bench_std_map() {
     throw std::runtime_error("`scratch_buf_size` is too small!");
   }
 
-  std::string map_type{type_to_string<map_t>()};
-  map_type.erase(std::remove_if(map_type.begin(), map_type.end(), [](unsigned char c){ return std::isspace(c); }), map_type.end());
-  std::replace(map_type.begin(), map_type.end(), ',', '|');
+  static std::string map_type{type_to_string<map_t>()};
+  if (map_type.size() > to_uint(map_type_print_len)) {
+    map_type.resize(to_uint(map_type_print_len));
+  }
   std::mt19937_64 rng{seed};
 
   // Initialize key and data buffers.
@@ -728,7 +705,7 @@ NVHM_NO_INLINE void bench_std_map() {
     workers.emplace_back(i);
   }
   
-  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
+  const std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_poly, rng)};
 
   std::vector<char> blobs;
   if constexpr (has_blobs) {
@@ -762,8 +739,13 @@ NVHM_NO_INLINE void bench_std_map() {
 
   for (int_t queue_len{min_insert_queue_len}; queue_len < max_insert_queue_len; ++queue_len) {
     if (num_insert_trials > 0) {
-      std::cout << map_type << ", " << std::setw(10) << "Worker " << 1 << ", Insert " << 100 << "%: ";
-      std::cout.flush();
+      std::cout
+        << "| "
+        << std::left << std::setw(static_cast<int>(map_type_print_len)) << map_type << " | "
+        << std::right << std::setw(4) << 1 << " | "
+        << std::left << std::setw(6) << "insert" << " | "
+        << std::right << std::setw(4) << 100 << " | " << std::setw(5) << "" << " | " << std::setw(4) << ""
+        << std::flush;
     }
 
     int_t total_count{};
@@ -782,14 +764,13 @@ NVHM_NO_INLINE void bench_std_map() {
         workers[0].assign(fn);
         auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
         if (num_insert_trials > 0) {
-          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-          std::cout.flush();
+          std::cout << " | " << std::setw(5) << ms.count() << std::flush;
         }
         total_count += count;
       }
     }
     if (num_insert_trials > 0) {
-      std::cout << ", size: " << map.size() << " [ " << total_count << " ]" << '\n';
+      std::cout << " | " << std::setw(10) << map.size() << " | " << std::setw(10) << "" << " | " << std::setw(12) << total_count << " |\n";
     }
   }
   if (num_find_trials <= 0) return;
@@ -799,26 +780,34 @@ NVHM_NO_INLINE void bench_std_map() {
   std::iota(indexes.begin(), indexes.end(), 0);
   std::shuffle(indexes.begin(), indexes.end(), rng);
 
-  std::cerr << "\nmap size after pruning: " << map.size();
   std::vector<bool> should_exist(keys.size());
   for (int_t i{}; i < to_int(indexes.size()); ++i) {
     int_t idx{indexes[to_uint(i)]};
-    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+    if (i < to_int(indexes.size()) * find_hit_perc / 100) {
       should_exist[to_uint(idx)] = true;
     } else {
       should_exist[to_uint(idx)] = false;
       map.erase(keys[to_uint(idx)]);
     }
   }
-  std::cerr << " -> " << map.size() << '\n';
+  if constexpr (false) {
+    std::cerr << "\nmap size after pruning: " << map.size() << " -> " << map.size() << '\n' << std::flush;
+  }
 
   // Shuffle once more to decorrelate insert and find order.
   std::shuffle(indexes.begin(), indexes.end(), rng);
 
   // Find
   for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit: ";
-    std::cout.flush();
+    if (num_find_trials > 0) {
+      std::cout
+        << "| "
+        << std::left << std::setw(static_cast<int>(map_type_print_len)) << map_type << " | "
+        << std::right << std::setw(4) << num_workers << " | "
+        << std::left << std::setw(6) << "find" << " | "
+        << std::right << std::setw(4) << find_hit_perc << " | " << std::setw(5) << "" << " | " << std::setw(4) << ""
+        << std::flush;
+    }
 
     int_t total_count{};
     for (int_t trial{}; trial < num_find_trials; ++trial) {
@@ -836,17 +825,17 @@ NVHM_NO_INLINE void bench_std_map() {
           workers[to_uint(w)].assign(fn);
         }
         auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
+        std::cout << " | " << std::setw(5) << ms.count() << std::flush;
         total_count += count;
       }
     }
-    std::cout << " [ " << total_count << " ]\n";
+    if (num_find_trials > 0) {
+      std::cout << " | " << std::setw(10) << map.size() << " | " << std::setw(10) << "" << " | " << std::setw(12) << total_count << " |\n";
+    }
   }
 }
 
-enum class map_type_t {
-  nvhm_map,
+NVHM_MAKE_ENUM_WITH_VALIDATOR_(map_type_t,
   #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
   nvhm_std_map_shim,
   std_unordered_map,
@@ -858,31 +847,8 @@ enum class map_type_t {
   #endif
   phmap_flat_hash_map,
   #endif
-};
-
-constexpr const char* to_string(map_type_t mt) {
-  switch (mt) {
-    case map_type_t::nvhm_map: return "nvhm_map";
-    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
-    case map_type_t::nvhm_std_map_shim: return "nvhm_std_map_shim";
-    case map_type_t::std_unordered_map: return "std_unordered_map";
-    #endif
-    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
-    case map_type_t::absl_flat_hash_map: return "absl_flat_hash_map";
-    #if __cplusplus >= 202002L
-    case map_type_t::folly_f14_value_map: return "folly_f14_value_map";
-    #endif
-    case map_type_t::phmap_flat_hash_map: return "phmap_flat_hash_map";
-    #endif
-  }
-
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, map_type_t mt) {
-  os << to_string(mt);
-  return os;
-}
+  nvhm_map
+)
 
 template <typename Key, typename Value, flags_t Flags, typename Kernel>
 void run_bench_nvhm_map_5(probe_seq_type_t probe_seq_type) {
@@ -1096,32 +1062,7 @@ void run_bench_std_map_0(
 int main(int argc, char* argv[]) {
   CLI::App app{"NVHashmap Benchmark"};
 
-  const std::map<std::string, statistic_t> str_to_statistic{
-    {to_string(statistic_t::max), statistic_t::max},
-    {to_string(statistic_t::sum), statistic_t::sum},
-    {to_string(statistic_t::mean), statistic_t::mean}
-  };
-  
-  const std::map<std::string, queue_t> str_to_queue{
-    {to_string(queue_t::shift), queue_t::shift},
-    {to_string(queue_t::ring), queue_t::ring}
-  };
-
-  const std::map<std::string, map_type_t> str_to_map_type{
-    {to_string(map_type_t::nvhm_map), map_type_t::nvhm_map},
-    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 10
-    {to_string(map_type_t::nvhm_std_map_shim), map_type_t::nvhm_std_map_shim},
-    {to_string(map_type_t::std_unordered_map), map_type_t::std_unordered_map},
-    #endif
-    #if NVHM_TOOLS_COMPILE_MAP_TYPES >= 20
-    {to_string(map_type_t::absl_flat_hash_map), map_type_t::absl_flat_hash_map},
-    #if __cplusplus >= 202002L
-    {to_string(map_type_t::folly_f14_value_map), map_type_t::folly_f14_value_map},
-    #endif
-    {to_string(map_type_t::phmap_flat_hash_map), map_type_t::phmap_flat_hash_map},
-    #endif
-  };
-
+  bool print_config{false};
   key_type_t key_type{key_type_t::int64};
   bool aggressive_prefetch{true};
   std::string value_type{"time"};
@@ -1129,64 +1070,71 @@ int main(int argc, char* argv[]) {
   kernel_type_t kernel_type{kernel_type_t::default_};
   probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
   bool serialize_copy{false};
+  bool print_header{true};
 
-  app.add_option("--stat", stat, "The statistic to use for reporting")->default_str(to_string(stat))->transform(CLI::CheckedTransformer(str_to_statistic, CLI::ignore_case));
-  app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
-  app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
-  app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
-  app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
-  app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
-  app.add_option("--aggressive_prefetch", aggressive_prefetch, "Aggressive prefetch")->default_val(aggressive_prefetch);
-  app.add_option("--value_type", value_type, "Value type (time | void)")->default_val(value_type);
-  app.add_option("--blob_size", blob_size, "Blob size")->default_val(blob_size)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--num_workers", num_workers, "Number of workers")->default_val(num_workers)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--num_insert_trials", num_insert_trials, "Number of trials for insert")->default_val(num_insert_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--insert_queue_type", insert_queue_type, "Insert queue type")->default_str(to_string(insert_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
-  app.add_option("--min_insert_queue_len", min_insert_queue_len, "Min insert queue length")->default_val(min_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--max_insert_queue_len", max_insert_queue_len, "Max insert queue length")->default_val(max_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--num_find_trials", num_find_trials, "Number of trials for find")->default_val(num_find_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--find_keep_perc", find_keep_perc, "Find keep percentage")->default_val(find_keep_perc)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--find_queue_type", find_queue_type, "Find queue type")->default_str(to_string(find_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
-  app.add_option("--min_find_queue_len", min_find_queue_len, "Min find queue length")->default_val(min_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->default_val(max_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--check_blobs", check_blobs, "Check blobs")->default_val(check_blobs);
+  app.add_option("--print_config", print_config, "Print config")->capture_default_str();
+  app.add_option("--stat", stat, "The statistic to use for reporting")->capture_default_str()->transform(statistic_t_validator);
+  app.add_option("--key_type", key_type, "Key type")->capture_default_str()->transform(key_type_t_validator);
+  app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--key_source", key_source, "Key source")->capture_default_str()->transform(key_source_t_validator);
+  app.add_option("--key_poly", key_poly, "Key coefficients for polynomial key source\n(c0 + c1 * x + c2 * x^2)")->delimiter(',')->capture_default_str();
+  app.add_option("--aggressive_prefetch", aggressive_prefetch, "Aggressive prefetch")->capture_default_str();
+  app.add_option("--value_type", value_type, "Value type (time | void)")->capture_default_str();
+  app.add_option("--blob_size", blob_size, "Blob size")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--num_workers", num_workers, "Number of workers")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_insert_trials", num_insert_trials, "Number of trials for insert")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--insert_queue_type", insert_queue_type, "Insert queue type")->capture_default_str()->transform(
+    make_enum_validator<0, queue_t::shift, queue_t::ring>());
+  app.add_option("--min_insert_queue_len", min_insert_queue_len, "Min insert queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--max_insert_queue_len", max_insert_queue_len, "Max insert queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--num_find_trials", num_find_trials, "Number of trials for find")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--find_hit_perc", find_hit_perc, "Find hit %")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--find_queue_type", find_queue_type, "Find queue type")->capture_default_str()->transform(
+    make_enum_validator<0, queue_t::shift, queue_t::ring>());
+  app.add_option("--min_find_queue_len", min_find_queue_len, "Min find queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--check_blobs", check_blobs, "Check blobs")->capture_default_str();
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
-  app.add_option("--map_type", map_type, "Map type")->default_str(to_string(map_type))->transform(CLI::CheckedTransformer(str_to_map_type, CLI::ignore_case));
-  app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
-  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));
-  app.add_option("--serialize_copy", serialize_copy, "Serialize copy")->default_val(serialize_copy);
+  app.add_option("--map_type", map_type, "Map type")->capture_default_str()->transform(map_type_t_validator);
+  app.add_option("--kernel_type", kernel_type, "Kernel type")->capture_default_str()->transform(kernel_type_t_validator);
+  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->capture_default_str()->transform(probe_seq_type_t_validator);
+  app.add_option("--serialize_copy", serialize_copy, "Serialize copy")->capture_default_str();
+  app.add_option("--print_header", print_header, "Print header")->capture_default_str();
+  app.add_option("--map_type_print_len", map_type_print_len, "Map type print length")->capture_default_str()->check(CLI::Range(32, 256));
 
   argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
 
-  std::cerr << argv[0] << " \\\n";
-  std::cerr << "  --stat " << stat << " \\\n";
-  std::cerr << "  --key_type " << key_type << " \\\n";
-  std::cerr << "  --num_keys " << num_keys << " \\\n";
-  std::cerr << "  --key_source " << key_source << " \\\n";
-  std::cerr << "  --key_c0 " << key_c[0] << " \\\n";
-  std::cerr << "  --key_c1 " << key_c[1] << " \\\n";
-  std::cerr << "  --key_c2 " << key_c[2] << " \\\n";
-  std::cerr << "  --aggressive_prefetch " << aggressive_prefetch << " \\\n";
-  std::cerr << "  --value_type " << value_type << " \\\n";
-  std::cerr << "  --blob_size " << blob_size << " \\\n";
-  std::cerr << "  --num_workers " << num_workers << " \\\n";
-  std::cerr << "  --num_insert_trials " << num_insert_trials << " \\\n";
-  std::cerr << "  --insert_queue_type " << insert_queue_type << " \\\n";
-  std::cerr << "  --min_insert_queue_len " << min_insert_queue_len << " \\\n";
-  std::cerr << "  --max_insert_queue_len " << max_insert_queue_len << " \\\n";
-  std::cerr << "  --num_find_trials " << num_find_trials << " \\\n";
-  std::cerr << "  --find_keep_perc " << find_keep_perc << " \\\n";
-  std::cerr << "  --find_queue_type " << find_queue_type << " \\\n";
-  std::cerr << "  --min_find_queue_len " << min_find_queue_len << " \\\n";
-  std::cerr << "  --max_find_queue_len " << max_find_queue_len << " \\\n";
-  std::cerr << "  --check_blobs " << check_blobs << " \\\n";
-  std::cerr << "  --seed " << seed << " \\\n";
-  std::cerr << "  --map_type " << map_type << " \\\n";
-  std::cerr << "  --kernel_type " << kernel_type << " \\\n";
-  std::cerr << "  --probe_seq_type " << probe_seq_type << " \\\n";
-  std::cerr << "  --serialize_copy " << serialize_copy << " \\\n";
+  if (print_config) {
+    std::cerr << argv[0] << " \\\n";
+    std::cerr << "  --stat " << stat << " \\\n";
+    std::cerr << "  --key_type " << key_type << " \\\n";
+    std::cerr << "  --num_keys " << num_keys << " \\\n";
+    std::cerr << "  --key_source " << key_source << " \\\n";
+    std::cerr << "  --key_poly " << key_poly[0] << ',' << key_poly[1] << ',' << key_poly[2] << " \\\n";
+    std::cerr << "  --aggressive_prefetch " << aggressive_prefetch << " \\\n";
+    std::cerr << "  --value_type " << value_type << " \\\n";
+    std::cerr << "  --blob_size " << blob_size << " \\\n";
+    std::cerr << "  --num_workers " << num_workers << " \\\n";
+    std::cerr << "  --num_insert_trials " << num_insert_trials << " \\\n";
+    std::cerr << "  --insert_queue_type " << insert_queue_type << " \\\n";
+    std::cerr << "  --min_insert_queue_len " << min_insert_queue_len << " \\\n";
+    std::cerr << "  --max_insert_queue_len " << max_insert_queue_len << " \\\n";
+    std::cerr << "  --num_find_trials " << num_find_trials << " \\\n";
+    std::cerr << "  --find_hit_perc " << find_hit_perc << " \\\n";
+    std::cerr << "  --find_queue_type " << find_queue_type << " \\\n";
+    std::cerr << "  --min_find_queue_len " << min_find_queue_len << " \\\n";
+    std::cerr << "  --max_find_queue_len " << max_find_queue_len << " \\\n";
+    std::cerr << "  --check_blobs " << check_blobs << " \\\n";
+    std::cerr << "  --seed " << seed << " \\\n";
+    std::cerr << "  --map_type " << map_type << " \\\n";
+    std::cerr << "  --kernel_type " << kernel_type << " \\\n";
+    std::cerr << "  --probe_seq_type " << probe_seq_type << " \\\n";
+    std::cerr << "  --serialize_copy " << serialize_copy << " \\\n";
+    std::cerr << "  --print_config " << print_config << " \\\n";
+    std::cerr << "  --print_header " << print_header << " \\\n";
+    std::cerr << "  --map_type_print_len " << map_type_print_len << " \\\n";
+  }
 
   if (min_insert_queue_len > max_insert_queue_len) {
     throw std::runtime_error("`min_insert_queue_len` must be less than `max_insert_queue_len`!");
@@ -1200,6 +1148,51 @@ int main(int argc, char* argv[]) {
 
   if (max_insert_queue_len - min_insert_queue_len < 1) {
     throw std::runtime_error("`max_insert_queue_len - min_insert_queue_len` must be = 1!");
+  }
+
+  const int num_trials{static_cast<int>(std::max(num_insert_trials, num_find_trials))};
+  const int num_bench_cols{3 * (num_trials - 1) + 5 * num_trials};
+  const int bench_str_cols{static_cast<int>(strlen("benchmark times in ms"))};
+  const int bench_not_str_cols{std::max(num_bench_cols - bench_str_cols, 0)};
+  const int bench_str_left_pad{bench_not_str_cols / 2};
+  const int bench_str_right_pad{bench_not_str_cols - bench_str_left_pad};
+
+  if (print_header) {
+    std::cout
+      << "| "
+      << std::left << std::setw(static_cast<int>(map_type_print_len)) << "map_count" << " | "
+      << std::right << std::setw(4) << "#wrk" << " | "
+      << std::left << std::setw(6) << "op" << " | "
+      << std::right << std::setw(4) << "hit%" << " | " << std::setw(5) << "queue" << " | " << std::setw(4) << "qlen"
+      << " | " << std::setw(bench_str_left_pad) << "" << "benchmark times in ms" << std::setw(bench_str_right_pad) << ""
+      << " | " << std::setw(10) << "size" << " | " << std::setw(10) << "capacity" << " | " << std::setw(12) << "transactions"
+      << " |\n" << std::flush;
+
+    std::cout
+      << "| "
+      << std::left << std::setw(static_cast<int>(map_type_print_len)) << "" << " | "
+      << std::right << std::setw(4) << "" << " | "
+      << std::left << std::setw(6) << "" << " | "
+      << std::right << std::setw(4) << "" << " | " << std::setw(5) << "" << " | " << std::setw(4) << "";
+    for (int_t i{}; i < std::max(num_insert_trials, num_find_trials); ++i) {
+      std::cout << " | " << std::setw(5) << to_string('#', i);
+    }
+    std::cout
+      << " | " << std::setw(10) << "" << " | " << std::setw(10) << "" << " | " << std::setw(12) << ""
+      << " |\n" << std::flush;
+
+    std::cout
+      << "| " << std::setfill('-')
+      << std::left << std::setw(static_cast<int>(map_type_print_len)) << "" << " | "
+      << std::right << std::setw(4) << "" << " | "
+      << std::left << std::setw(6) << "" << " | "
+      << std::right << std::setw(4) << "" << " | " << std::setw(5) << "" << " | " << std::setw(4) << "";
+    for (int_t i{}; i < std::max(num_insert_trials, num_find_trials); ++i) {
+      std::cout << " | " << std::setw(5) << "";
+    }
+    std::cout
+      << " | " << std::setw(10) << "" << " | " << std::setw(10) << "" << " | " << std::setw(12) << ""
+      << " |\n" << std::setfill(' ') << std::flush;
   }
 
   if (map_type == map_type_t::nvhm_map) {

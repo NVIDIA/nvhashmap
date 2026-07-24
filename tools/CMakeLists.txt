@@ -25,29 +25,28 @@ include_directories(
 # >=20: All (available) platform kernels
 # >=30: All integer kernels.
 # >=40: All (fallback) array kernels.
+set(NVHM_TOOLS_COMPILE_KERNELS "10" CACHE STRING "Controls what kernel variants are compiled.")
 
 # `NVHM_TOOLS_COMPILE_PROBE_SEQS`: Controls the amount of probe sequence variants compiled.
 #    0: Default probe sequence only.
 # >=10: Unaligned probe squences.
 # >=20: Aligned probe sequences.
+set(NVHM_TOOLS_COMPILE_PROBE_SEQS "0" CACHE STRING "Controls what probe sequence variants are compiled.")
+
+message(STATUS "NVHM_TOOLS_COMPILE_KERNELS    = ${NVHM_TOOLS_COMPILE_KERNELS}")
+message(STATUS "NVHM_TOOLS_COMPILE_PROBE_SEQS = ${NVHM_TOOLS_COMPILE_PROBE_SEQS}")
 
 add_executable(coll_count coll_count.cpp)
-target_compile_definitions(coll_count PRIVATE
-  NVHM_TOOLS_COMPILE_KERNELS=10
-  NVHM_TOOLS_COMPILE_PROBE_SEQS=0
-)
+target_compile_definitions(coll_count PRIVATE "NVHM_TOOLS_COMPILE_KERNELS=${NVHM_TOOLS_COMPILE_KERNELS}")
+target_compile_definitions(coll_count PRIVATE "NVHM_TOOLS_COMPILE_PROBE_SEQS=${NVHM_TOOLS_COMPILE_PROBE_SEQS}")
 
 add_executable(find_psl find_psl.cpp)
-target_compile_definitions(find_psl PRIVATE
-  NVHM_TOOLS_COMPILE_KERNELS=10
-  NVHM_TOOLS_COMPILE_PROBE_SEQS=0
-)
+target_compile_definitions(find_psl PRIVATE "NVHM_TOOLS_COMPILE_KERNELS=${NVHM_TOOLS_COMPILE_KERNELS}")
+target_compile_definitions(find_psl PRIVATE "NVHM_TOOLS_COMPILE_PROBE_SEQS=${NVHM_TOOLS_COMPILE_PROBE_SEQS}")
 
 add_executable(kernel_pop kernel_pop.cpp)
-target_compile_definitions(kernel_pop PRIVATE
-  NVHM_TOOLS_COMPILE_KERNELS=10
-  NVHM_TOOLS_COMPILE_PROBE_SEQS=0
-)
+target_compile_definitions(kernel_pop PRIVATE "NVHM_TOOLS_COMPILE_KERNELS=${NVHM_TOOLS_COMPILE_KERNELS}")
+target_compile_definitions(kernel_pop PRIVATE "NVHM_TOOLS_COMPILE_PROBE_SEQS=${NVHM_TOOLS_COMPILE_PROBE_SEQS}")
 
 if (NVHM_BUILD_BENCH)
   add_subdirectory(benchmark)

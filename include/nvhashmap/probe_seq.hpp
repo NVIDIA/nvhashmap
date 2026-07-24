@@ -40,9 +40,9 @@ class probe_seq : public self_aware<Self> {
   constexpr static bitmask_t alignment_mask{size_mask_v<alignment>};
 
   constexpr static psl_t max_length{MaxLength};
-  static_assert(max_length >= alignment && max_length <= inf_psl);
-  constexpr static bool is_bounded{max_length < inf_psl};
-  constexpr static bool is_unbounded{max_length == inf_psl};
+  static_assert(max_length == inf_psl || max_length >= alignment);
+  constexpr static bool is_bounded{max_length >= 0};
+  constexpr static bool is_unbounded{max_length < 0};
 
   constexpr probe_seq() : psl_{} {}
 
@@ -60,7 +60,6 @@ class probe_seq : public self_aware<Self> {
 
   constexpr self_type& operator+=(int_t n) noexcept {
     NVHM_ASSERT_(n >= 0, "n = ", n);
-    //NVHM_ASSERT_(psl_ >= 0 && psl_ < max_length, "Probe sequence is out of bounds! (psl = ", psl_, ", max_length = ", max_length, ')');
     psl_ += n;
     NVHM_ASSERT_(psl_ >= 0);
     return *self();

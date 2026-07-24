@@ -25,6 +25,9 @@
 
 namespace nvhm {
 
+class raw_map_read_pos;
+class raw_map_write_pos;
+
 class raw_map_pos : public wrapped_pos<raw_pos_t> {
  public:
   using base_type = wrapped_pos<raw_pos_t>;
@@ -47,6 +50,9 @@ class raw_map_pos : public wrapped_pos<raw_pos_t> {
   constexpr raw_map_pos& operator=(raw_map_pos&&) noexcept = default;
 
   constexpr explicit raw_map_pos(raw_pos_t inner) noexcept : base_type{inner} {}
+
+  template <typename ReadPos>
+  friend ReadPos downgrade(raw_map_write_pos&&) noexcept;
 };
 
 class raw_map_read_pos : public raw_map_pos {
@@ -74,6 +80,12 @@ class raw_map_write_pos : public raw_map_pos {
 
   constexpr explicit raw_map_write_pos(raw_pos_t inner) noexcept : base_type{inner} {}
 };
+
+template <typename ReadPos = raw_map_read_pos>
+[[nodiscard]] NVHM_ALWAYS_INLINE ReadPos downgrade(raw_map_write_pos&& pos) noexcept {
+  static_assert(std::is_same_v<ReadPos, raw_map_read_pos>);
+  return ReadPos{pos.inner_};
+}
 
 template <typename Self, typename Conf, typename ProbeSeq, typename Allocator>
 class raw_map_base : public container<Self> {

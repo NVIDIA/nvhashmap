@@ -36,6 +36,9 @@ namespace nvhm {
 //   return h & shard_mask;
 // }
 
+template <typename Inner> class sharded_read_pos;
+template <typename Inner> class sharded_write_pos;
+
 template <typename Inner>
 class sharded_pos : public wrapped_pos<Inner> {
  public:
@@ -43,10 +46,6 @@ class sharded_pos : public wrapped_pos<Inner> {
   using inner_type = typename base_type::inner_type;
 
   sharded_pos() = delete;
-
-#if defined(NVHM_DEBUG_API_)
-  constexpr shard_idx_t shard_idx() const noexcept { return shard_idx_; }
-#endif
 
   template <typename RhsInner>
   constexpr friend bool operator==(const sharded_pos& lhs, const sharded_pos<RhsInner>& rhs) {
@@ -90,6 +89,9 @@ class sharded_pos : public wrapped_pos<Inner> {
 
   template <typename>
   friend class sharded;
+  
+  template <typename ReadPos, typename WriteInner>
+  friend ReadPos downgrade(sharded_write_pos<WriteInner>&&) noexcept;
 };
 
 template <typename Inner>
@@ -123,6 +125,11 @@ class sharded_write_pos : public sharded_pos<Inner> {
   constexpr explicit sharded_write_pos(inner_type&& inner, shard_idx_t shard_idx) noexcept
     : base_type{std::move(inner), shard_idx} {}
 };
+
+template <typename ReadPos, typename WriteInner>
+[[nodiscard]] NVHM_ALWAYS_INLINE ReadPos downgrade(sharded_write_pos<WriteInner>&& pos) noexcept {
+  return ReadPos{downgrade<typename ReadPos::inner_type>(std::move(pos.inner_)), pos.shard_idx_};
+}
 
 template <typename Shard>
 class sharded : public container<sharded<Shard>> {

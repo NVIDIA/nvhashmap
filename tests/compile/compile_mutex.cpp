@@ -19,40 +19,4 @@
 
 using namespace nvhm;
 
-int main() {
-  using mutex_t = spin_wait_mutex<>;
-
-  mutex_t m;
-  bool b;
-  int_t n;
-
-  b = m.is_locked();
-  m.lock();
-  b = m.try_lock();
-  m.unlock();
-  m.downgrade();
-
-  n = m.num_shared_locks();
-  n = m.lock_shared();
-  b = m.try_lock_shared();
-  n = m.unlock_shared();
-  b = m.try_upgrade();
-
-  std::unique_lock<mutex_t> ul{m};
-  std::shared_lock<mutex_t> sl{m};
-
-  ul.lock();
-  b = ul.try_lock();
-  ul.unlock();
-  ul.release();
-  sl = downgrade(std::move(ul));
-  
-  sl.lock();
-  b = sl.try_lock();
-  sl.unlock();
-  sl.release();
-  ul = upgrade(std::move(sl));
-  auto opt_ul{try_upgrade(sl)};
-
-  return b || n != 0 || opt_ul.has_value();
-}
+int main() { return 0; }

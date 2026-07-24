@@ -20,12 +20,12 @@
 #include <nvhashmap/probe_seq.hpp>
 
 using namespace nvhm;
-#include "utils.hpp"
+#include "tools_common.hpp"
 
 int_t init_capacity{1};
 int_t num_keys{1'000'000};
 key_source_t key_source{key_source_t::polynomial};
-int_t key_c[]{13, 3, 7};
+std::array<int_t, 3> key_poly{13, 3, 7};
 test_trigger_t test_trigger{test_trigger_t::interval};
 int_t test_interval{50'000};
 int_t test_load_perc{85};
@@ -40,7 +40,7 @@ NVHM_NO_INLINE void fill_and_count_populations() {
 
   std::mt19937_64 rng{seed};
 
-  std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
+  std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_poly, rng)};
   const int num_align{rendered_length(num_keys)};
   
   std::cout << type_to_string<set_t>() << ", populations @ ";
@@ -69,7 +69,7 @@ NVHM_NO_INLINE void fill_and_count_populations() {
     std::cout << sep << std::setw(num_align) << "";
     sep = " | ";
   }
-  std::cout << " |\n" << std::setfill(' ');
+  std::cout << " |\n" << std::setfill(' ') << std::flush;
 
   int_t prev_capacity{};
   for (int_t i{}; i < num_keys;) {
@@ -248,19 +248,17 @@ int main(int argc, char* argv[]) {
   nvhm_type_t nvhm_type{nvhm_type_t::map};
   probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
 
-  app.add_option("--init_capacity", init_capacity, "Initial capacity")->default_val(init_capacity)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
-  app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
-  app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
-  app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
-  app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
-  app.add_option("--test_trigger", test_trigger, "Test trigger")->default_str(to_string(test_trigger))->transform(CLI::CheckedTransformer(str_to_test_trigger, CLI::ignore_case));
-  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->default_val(test_interval);
-  app.add_option("--precision", precision, "Precision of the output")->default_val(precision)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->default_str(to_string(nvhm_type))->transform(CLI::CheckedTransformer(str_to_nvhm_type, CLI::ignore_case));
-  app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
-  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));
+  app.add_option("--init_capacity", init_capacity, "Initial capacity")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--key_type", key_type, "Key type")->capture_default_str()->transform(key_type_t_validator);
+  app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--key_source", key_source, "Key source")->capture_default_str()->transform(key_source_t_validator);
+  app.add_option("--key_poly", key_poly, "Key coefficients for polynomial key source\n(c0 + c1 * x + c2 * x^2)")->delimiter(',')->capture_default_str();
+  app.add_option("--test_trigger", test_trigger, "Test trigger")->capture_default_str()->transform(test_trigger_t_validator);
+  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->capture_default_str();
+  app.add_option("--precision", precision, "Precision of the output")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->capture_default_str()->transform(nvhm_type_t_validator);
+  app.add_option("--kernel_type", kernel_type, "Kernel type")->capture_default_str()->transform(kernel_type_t_validator);
+  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->capture_default_str()->transform(probe_seq_type_t_validator);
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
 
   argv = app.ensure_utf8(argv);

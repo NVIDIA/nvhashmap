@@ -49,24 +49,10 @@ struct mask {
   NVHM_MAKE_NOT_INSTANTIABLE_(mask);
 };
 
-enum class mask_align_t {
+NVHM_MAKE_ENUM_(mask_align_t,
   left,
   right
-};
-
-constexpr const char* to_string(mask_align_t a) noexcept {
-  switch (a) {
-    case mask_align_t::left:
-      return "left";
-    case mask_align_t::right:
-      return "right";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, mask_align_t a) {
-  return os << to_string(a);
-}
+);
 
 template <int_t MaxCount>
 struct bitset_mask final : public mask {

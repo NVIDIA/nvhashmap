@@ -11,22 +11,46 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: x86_64 gcc
+          - name: x86_64 gcc cxx17
             runs-on: ubuntu-26.04
             cc: /usr/bin/gcc
             cxx: /usr/bin/g++
-          - name: x86_64 clang
+            cxxstd: 17
+          - name: x86_64 clang cxx17
             runs-on: ubuntu-26.04
             cc: /usr/bin/clang
             cxx: /usr/bin/clang++
-          - name: arm64 gcc
+            cxxstd: 17
+          - name: arm64 gcc cxx17
             runs-on: ubuntu-26.04-arm
             cc: /usr/bin/gcc
             cxx: /usr/bin/g++
-          - name: arm64 clang
+            cxxstd: 17
+          - name: arm64 clang cxx17
             runs-on: ubuntu-26.04-arm
             cc: /usr/bin/clang
             cxx: /usr/bin/clang++
+            cxxstd: 17
+          - name: x86_64 gcc cxx20
+            runs-on: ubuntu-26.04
+            cc: /usr/bin/gcc
+            cxx: /usr/bin/g++
+            cxxstd: 20
+          - name: x86_64 clang cxx20
+            runs-on: ubuntu-26.04
+            cc: /usr/bin/clang
+            cxx: /usr/bin/clang++
+            cxxstd: 20
+          - name: arm64 gc cxx20c
+            runs-on: ubuntu-26.04-arm
+            cc: /usr/bin/gcc
+            cxx: /usr/bin/g++
+            cxxstd: 20
+          - name: arm64 clang cxx20
+            runs-on: ubuntu-26.04-arm
+            cc: /usr/bin/clang
+            cxx: /usr/bin/clang++
+            cxxstd: 20
 
     name: ${{ matrix.name }} tests
     runs-on: ${{ matrix.runs-on }}
@@ -48,7 +72,7 @@ jobs:
           git submodule update --init --recursive
           sed -i 's|#include <bmi2intrin.h>|#include <x86gprintrin.h>|' ./third_party/abseil-cpp/absl/container/internal/raw_hash_set.h
           CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${{ matrix.cxxstd }}
 
       - name: Build
         run: |
@@ -61,4 +85,5 @@ jobs:
           ./build/tests/test_masks
           ./build/tests/test_kernels
           ./build/tests/test_maps
+          ./build/tests/test_mutex
           ./build/tests/test_probe_seq
