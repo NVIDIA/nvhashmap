@@ -185,7 +185,7 @@ struct uint_mask final : public mask {
       m <<= bits_per_slot - 1;
     }
 
-    static_assert(std_ext::popcount_fallback(m) == max_count);
+    NVHM_ASSERT_(count(m) == max_count);
     return m;
   }
   constexpr static repr_type single(int_t i, bool v = true) noexcept {
