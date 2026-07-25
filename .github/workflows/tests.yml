@@ -41,7 +41,7 @@ jobs:
             cc: /usr/bin/clang
             cxx: /usr/bin/clang++
             cxxstd: 20
-          - name: arm64 gc cxx20c
+          - name: arm64 gcc cxx20
             runs-on: ubuntu-26.04-arm
             cc: /usr/bin/gcc
             cxx: /usr/bin/g++
