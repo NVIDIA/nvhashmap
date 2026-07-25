@@ -184,6 +184,8 @@ struct uint_mask final : public mask {
     if constexpr (alignment == mask_align_t::left) {
       m <<= bits_per_slot - 1;
     }
+
+    static_assert(std_ext::popcount_fallback(m) == max_count);
     return m;
   }
   constexpr static repr_type single(int_t i, bool v = true) noexcept {
@@ -214,8 +216,6 @@ struct uint_mask final : public mask {
 
   constexpr static bool has_next(repr_type m) noexcept { return m != 0; }
   constexpr static int_t count(repr_type m) noexcept { return popcount(m); }
-  static_assert(count(empty()) == 0);
-  static_assert(count(full()) == max_count);
 
   constexpr static int_t next(repr_type m) noexcept {
     NVHM_ASSERT_(has_next(m));
