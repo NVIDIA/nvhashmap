@@ -17,11 +17,11 @@
 
 #pragma once
 
-#include <optional>
-#include "container.hpp"
 #include "allocator.hpp"
+#include "container.hpp"
 #include "kernel.hpp"
 #include "memory.hpp"
+#include <optional>
 
 namespace nvhm {
 
@@ -50,6 +50,9 @@ class raw_map_pos : public wrapped_pos<raw_pos_t> {
   constexpr raw_map_pos& operator=(raw_map_pos&&) noexcept = default;
 
   constexpr explicit raw_map_pos(raw_pos_t inner) noexcept : base_type{inner} {}
+
+  template <typename ReadPos>
+  friend ReadPos downgrade(raw_map_write_pos&&) noexcept;
 };
 
 class raw_map_read_pos : public raw_map_pos {
@@ -77,6 +80,12 @@ class raw_map_write_pos : public raw_map_pos {
 
   constexpr explicit raw_map_write_pos(raw_pos_t inner) noexcept : base_type{inner} {}
 };
+
+template <typename ReadPos>
+[[nodiscard]] NVHM_ALWAYS_INLINE ReadPos downgrade(raw_map_write_pos&& pos) noexcept {
+  static_assert(std::is_same_v<ReadPos, raw_map_read_pos>);
+  return ReadPos{pos.inner_};
+}
 
 template <typename Self, typename Conf, typename ProbeSeq, typename Allocator>
 class raw_map_base : public container<Self> {
@@ -140,7 +149,7 @@ class raw_map_base : public container<Self> {
       cache_.emplace(entry());
       return &cache_.value();
     }
-    
+
     constexpr bool is_left() const noexcept { return inner_ < 0; }
     constexpr bool is_right() const noexcept { return inner_ >= outer_->capacity(); }
 
@@ -180,13 +189,10 @@ class raw_map_base : public container<Self> {
     }
 
     template <typename RhsSelf, typename RhsOuter>
-    constexpr friend difference_type operator-(const iterator_base& lhs, const iterator_base<RhsSelf, RhsOuter>& rhs) {
-      iterator_base l{lhs};
-      iterator_base<RhsSelf, RhsOuter> r{rhs};
-
+    constexpr friend difference_type operator-(self_type lhs, const iterator_base<RhsSelf, RhsOuter>& rhs) {
       difference_type n{};
-      for (; l < r; ++l) { --n; }
-      for (; l > r; --l) { ++n; }
+      for (; lhs < rhs; ++lhs) --n;
+      for (; lhs > rhs; --lhs) ++n;
       return n;
     }
 
@@ -265,7 +271,7 @@ class raw_map_base : public container<Self> {
     using base_type = iterator_base<iterator, Self>;
     using self_type = typename base_type::self_type;
     using outer_type = typename base_type::outer_type;
-    
+
     iterator() = delete;
     constexpr iterator(const iterator&) noexcept = default;
     constexpr iterator& operator=(const iterator&) noexcept = default;
@@ -290,7 +296,7 @@ class raw_map_base : public container<Self> {
    public:
     constexpr explicit prefetch_hint() noexcept : hash_{} {}
     constexpr explicit prefetch_hint(const key_type& key) noexcept : hash_{key_to_hash(key)} {}
-    
+
     constexpr hash_t hash() const noexcept { return hash_; }
 
     constexpr friend bool operator==(const prefetch_hint& lhs, const prefetch_hint& rhs) noexcept { return lhs.hash_ == rhs.hash_; }
@@ -367,12 +373,10 @@ class raw_map_base : public container<Self> {
 
     std::vector<blob_t> res(to_uint(count(key) * blob_size));
     size_t n{};
-    self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t pos, const probe_seq_type&) {
-        std::copy_n(&blobs[pos * blob_stride], blob_size, &res[n]);
-        n += to_uint(blob_size);
-      }
-    );
+    self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
+      std::copy_n(&blobs[pos * blob_stride], blob_size, &res[n]);
+      n += to_uint(blob_size);
+    });
     NVHM_ASSERT_(n == res.size(), "n = ", n, ", res.size() = ", res.size());
     return res;
   }
@@ -388,9 +392,9 @@ class raw_map_base : public container<Self> {
 
     std::vector<value_type> res(to_uint(count(key)));
     size_t n{};
-    self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t pos, const probe_seq_type&) { res[n++] = values[pos]; }
-    );
+    self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
+      res[n++] = values[pos];
+    });
     NVHM_ASSERT_(n == res.size(), "n = ", n, ", res.size() = ", res.size());
     return res;
   }
@@ -459,9 +463,7 @@ class raw_map_base : public container<Self> {
    *
    * @return `true` if no errors were found.
    */
-  constexpr bool check_integrity() const noexcept {
-    return self()->check_integrity_();
-  }
+  constexpr bool check_integrity() const noexcept { return self()->check_integrity_(); }
 
   /**
    * Mark all slots as free.
@@ -519,9 +521,9 @@ class raw_map_base : public container<Self> {
    */
   constexpr int_t count(const key_type& key) const noexcept {
     int_t n{};
-    self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t, const probe_seq_type&) { ++n; }
-    );
+    self()->for_each_(key, key_to_hash(key), [&](raw_pos_t, const probe_seq_type&) {
+      ++n;
+    });
     return n;
   }
   /**
@@ -534,9 +536,9 @@ class raw_map_base : public container<Self> {
   constexpr int_t count_if(const Pred& pred) const {
     static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
     int_t n{};
-    self()->for_each_(
-      [&](raw_pos_t pos) { n += pred(read_pos{pos}); }
-    );
+    self()->for_each_([&](raw_pos_t pos) {
+      n += pred(read_pos{pos});
+    });
     return n;
   }
 
@@ -733,9 +735,9 @@ class raw_map_base : public container<Self> {
    */
   inline std::vector<read_pos> find_all(const key_type& key) const {
     std::vector<read_pos> res;
-    self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t pos, const probe_seq_type&) { res.emplace_back(pos); }
-    );
+    self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
+      res.emplace_back(pos);
+    });
     return res;
   }
 
@@ -777,9 +779,7 @@ class raw_map_base : public container<Self> {
     const int_t blob_stride{conf_.blob_stride()};
     const blob_t* const __restrict blobs{blobs_.get()};
 
-    self()->for_each_(
-      [&](raw_pos_t pos) { func(&blobs[pos * blob_stride]); }
-    );
+    self()->for_each_([&](raw_pos_t pos) { func(&blobs[pos * blob_stride]); });
   }
   /**
    * Iterate over the data structure and call a function for each blob.
@@ -794,9 +794,7 @@ class raw_map_base : public container<Self> {
     const int_t blob_stride{conf_.blob_stride()};
     blob_t* const __restrict blobs{blobs_.get()};
 
-    self()->for_each_(
-      [&](raw_pos_t pos) { func(&blobs[pos * blob_stride]); }
-    );
+    self()->for_each_([&](raw_pos_t pos) { func(&blobs[pos * blob_stride]); });
   }
   /**
    * Iterate over the data structure and call a function for each LRU.
@@ -829,9 +827,7 @@ class raw_map_base : public container<Self> {
     static_assert(std::is_invocable_v<Func, value_type>, "`func` must be `func(value_type)`!");
     const value_type* const __restrict values{values_.get()};
 
-    self()->for_each_(
-      [&](raw_pos_t pos) { func(values[pos]); }
-    );
+    self()->for_each_([&](raw_pos_t pos) { func(values[pos]); });
   }
   /**
    * Iterate over the data structure and call a function for each value.
@@ -992,9 +988,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated LRU value.
    */
-  constexpr lru_t lru_at(const pos& pos) const noexcept {
-    return self()->lru_at_(pos.inner());
-  }
+  constexpr lru_t lru_at(const pos& pos) const noexcept { return self()->lru_at_(pos.inner()); }
 
   /**
    * Fetch the mapped value at the provided position.
@@ -1002,18 +996,14 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr const_mapped_type mapped_at(const pos& pos) const noexcept {
-    return mapped_at_(pos.inner());
-  }
+  constexpr const_mapped_type mapped_at(const pos& pos) const noexcept { return mapped_at_(pos.inner()); }
   /**
    * Fetch the mapped value at the provided position.
    *
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr mapped_type mapped_at(const write_pos& pos) noexcept {
-    return mapped_at_(pos.inner());
-  }
+  constexpr mapped_type mapped_at(const write_pos& pos) noexcept { return mapped_at_(pos.inner()); }
 
   /**
    * @return The maximum permissible load factor of the data structure.
@@ -1071,7 +1061,10 @@ class raw_map_base : public container<Self> {
    * @param with_blobs Whether and how to render blobs.
    * @return The output stream.
    */
-  constexpr void render(std::ostream& os, bool with_values = has_values, blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide) const {
+  constexpr void render(
+    std::ostream& os, bool with_values = has_values,
+    blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide
+  ) const {
     if (!with_values && with_blobs == blob_render_t::hide) {
       const char* sep{""};
       self()->for_each_key([&](const key_type& key) {
@@ -1091,7 +1084,7 @@ class raw_map_base : public container<Self> {
           value_end = "}";
         }
       }
-      
+
       const char* sep{""};
       self()->for_each_([&](raw_pos_t pos) {
         os << sep << self()->key_at_(pos) << " -> ";
@@ -1185,7 +1178,7 @@ class raw_map_base : public container<Self> {
   /**
    * Assigns the value at `pos` to the provided value.
    */
-  template<typename V>
+  template <typename V>
   constexpr void set_value_at(const write_pos& pos, V&& value) {
     value_at(pos) = std::forward<V>(value);
   }
@@ -1323,9 +1316,9 @@ class raw_map_base : public container<Self> {
    */
   inline std::vector<write_pos> update_all(const key_type& key) {
     std::vector<write_pos> res;
-    self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t pos, const probe_seq_type&) { res.emplace_back(pos); }
-    );
+    self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
+      res.emplace_back(pos);
+    });
     return res;
   }
 
@@ -1355,18 +1348,14 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return Associated value.
    */
-  constexpr const value_type& value_at(const pos& pos) const {
-    return value_at_(pos.inner());
-  }
+  constexpr const value_type& value_at(const pos& pos) const { return value_at_(pos.inner()); }
   /**
    * Fetch the value at `pos`.
    *
    * @param pos The position to query.
    * @return Associated value.
    */
-  constexpr value_type& value_at(const write_pos& pos) {
-    return value_at_(pos.inner());
-  }
+  constexpr value_type& value_at(const write_pos& pos) { return value_at_(pos.inner()); }
 
   /**
    * Return a dummy `write_pos` that is not associated with any position in the data structure.
@@ -1458,7 +1447,7 @@ class raw_map_base : public container<Self> {
   constexpr const blob_t* blob_at_(const raw_pos_t pos) const noexcept {
     static_assert(has_blobs, "`blob_at_` is not supported for this configuration!");
     NVHM_ASSERT_(self()->contains_at_(pos), "pos = ", pos);
-    
+
     return &blobs_[to_uint(pos * conf_.blob_stride())];
   }
   constexpr blob_t* blob_at_(const raw_pos_t pos) noexcept {
@@ -1468,7 +1457,9 @@ class raw_map_base : public container<Self> {
     return &blobs_[to_uint(pos * conf_.blob_stride())];
   }
 
-  constexpr raw_pos_t front_() const noexcept { return self()->find_if_([](raw_pos_t) { return true; }); }
+  constexpr raw_pos_t front_() const noexcept {
+    return self()->find_if_([](raw_pos_t) { return true; });
+  }
 
   constexpr hash_t hint_to_hash_(const key_type& key, const prefetch_hint& hint) const {
     NVHM_ASSUME_(key_to_hash(key) == hint.hash(), "key = ", key, ", hash = ", key_to_hash(key), ", hint = ", hint.hash());
@@ -1520,13 +1511,13 @@ class raw_map_base : public container<Self> {
   }
 };
 
-template<typename T>
+template <typename T>
 T* view_blob_as(std::byte* ptr) noexcept {
   return reinterpret_cast<T*>(ptr);
 }
-template<typename T>
+template <typename T>
 const T* view_blob_as(const std::byte* ptr) noexcept {
   return reinterpret_cast<const T*>(ptr);
 }
 
-} // namespace nvhm
+}  // namespace nvhm

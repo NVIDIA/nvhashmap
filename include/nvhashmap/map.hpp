@@ -17,9 +17,9 @@
 
 #pragma once
 
-#include "swiss_map_base.hpp"
-#include "probe_seq.hpp"
 #include "conf.hpp"
+#include "probe_seq.hpp"
+#include "swiss_map_base.hpp"
 
 namespace nvhm {
 
@@ -35,9 +35,9 @@ namespace nvhm {
  * @tparam MaxProbeLength Caps probe length.
  */
 template <
-  typename Key, typename Value = void,
-  flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
-  typename ProbeSeq = default_seq_t, typename Allocator = default_allocator_t>
+  typename Key, typename Value = void, flags_t Flags = flags_t::none,
+  typename Kernel = default_kernel_t<>, typename ProbeSeq = default_seq_t,
+  typename Allocator = default_allocator_t>
 class map : public swiss_map_base<
   map<Key, Value, Flags, Kernel, ProbeSeq, Allocator>,
   conf<Key, Value, Flags, Kernel::size>, ProbeSeq, Allocator
@@ -54,12 +54,12 @@ class map : public swiss_map_base<
   using base_type::flags;
   using base_type::has_blobs;
   using base_type::kernel_size;
-  
+
   using const_entry_type = typename base_type::const_entry_type;
   using entry_type = typename base_type::entry_type;
   using const_mapped_type = typename base_type::const_mapped_type;
   using mapped_type = typename base_type::mapped_type;
-  
+
   using probe_seq_type = typename base_type::probe_seq_type;
   using allocator_type = typename base_type::allocator_type;
 
@@ -74,7 +74,7 @@ class map : public swiss_map_base<
     num_empty_ = other.num_empty_;
     num_tombstone_ = other.num_tombstone_;
   }
-  constexpr map& operator=(const map& __restrict other) {
+  constexpr map& operator=(const map& other) {
     if (self() == &other) return *self();
     base_type::operator=(other);
 
@@ -102,7 +102,7 @@ class map : public swiss_map_base<
   using base_type::capacity;
   using base_type::self;
   using base_type::size;
-  
+
   /**
    * Returns the current growth limit of the map.
    *
@@ -123,7 +123,7 @@ class map : public swiss_map_base<
  protected:
   template <typename, typename, typename, typename>
   friend class raw_map_base;
-  template <typename, typename, typename, typename> 
+  template <typename, typename, typename, typename>
   friend class swiss_map_base;
 
   using base_type::conf_;
@@ -179,13 +179,13 @@ class map : public swiss_map_base<
   NVHM_ALWAYS_INLINE constexpr bool check_integrity_() const noexcept {
     const int_t end{capacity()};
     const state_t* const __restrict states{states_.get()};
-    
+
     int_t num_empty{};
     int_t num_tombstone{};
 
     for (raw_pos_t off{}; off < end; off += kernel_size) {
       const auto k{kernel_type::load(&states[off])};
-      
+
       // TODO: Add optimized kernel function for this?
       num_empty += mask_type::count(kernel_type::mask_empty(k));
       num_tombstone += mask_type::count(kernel_type::mask_tombstone(k));
@@ -228,7 +228,9 @@ class map : public swiss_map_base<
     }
   }
 
-  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(const key_type& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(
+    const key_type& __restrict key, const hash_t hash
+  ) {
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
     const bitmask_t bucket_mask{bucket_mask_};
@@ -240,7 +242,7 @@ class map : public swiss_map_base<
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     for (; seq.has_next(); seq += kernel_size) {
-      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
       const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
       const auto k{kernel_type::load(&states[off])};
@@ -249,7 +251,7 @@ class map : public swiss_map_base<
       for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
         raw_pos_t pos{mask_type::next(m, off)};
         if (NVHM_UNLIKELY_(keys[pos] != key)) continue;
-        
+
         pos = reset_slot_(end, states[pos], kernel_type::has_empty(k)) ? pos : npos;
         return {true, pos, std::move(seq)};
       }
@@ -262,7 +264,9 @@ class map : public swiss_map_base<
   }
 
   template <typename PS>
-  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(
+    raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash
+  ) {
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -281,14 +285,14 @@ class map : public swiss_map_base<
 
     auto [off, idx]{splice_pos<kernel_size>(pos)};
     NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
-    NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+    NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
     if (idx >= kernel_size - 1) {
       seq += kernel_size;
       if (NVHM_UNLIKELY_(!seq.has_next())) {
         return {false, npos, std::move(seq)};
       }
-      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
       off = align_pos(seq.next(), bucket_mask);
       idx = -1;
     }
@@ -312,7 +316,7 @@ class map : public swiss_map_base<
 
       seq += kernel_size;
       if (!seq.has_next()) break;
-      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
       off = align_pos(seq.next(), bucket_mask);
       k = kernel_type::load(&states[off]);
@@ -328,13 +332,13 @@ class map : public swiss_map_base<
     state_t* const __restrict states{states_.get()};
 
     const auto [off, idx]{splice_pos<kernel_size>(pos)};
-    
+
     const auto k{kernel_type::load(&states[off])};
     if (NVHM_LIKELY_(is_hash(kernel_type::at(k, idx)))) {
       pos = reset_slot_(end, states[pos], kernel_type::has_empty(k)) ? pos : npos;
       return {true, pos};
     }
-  
+
     return {false, pos};
   }
 
@@ -395,7 +399,7 @@ class map : public swiss_map_base<
     int_t num_tombstone{num_tombstone_};
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     for (; seq.has_next(); seq += kernel_size) {
-      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+      NVHM_ASSERT_(seq.psl() < capacity(), "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
       const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
       const auto k{kernel_type::load(&states[off])};
@@ -433,7 +437,9 @@ class map : public swiss_map_base<
     return num_erased;
   }
 
-  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_first_(const key_type& __restrict key, const hash_t hash) const {
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_first_(
+    const key_type& __restrict key, const hash_t hash
+  ) const {
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
     const bitmask_t bucket_mask{bucket_mask_};
@@ -444,7 +450,7 @@ class map : public swiss_map_base<
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     for (; seq.has_next(); seq += kernel_size) {
-      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+      NVHM_ASSERT_(seq.psl() < capacity(), "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
       const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
       const auto k{kernel_type::load(&states[off])};
@@ -472,7 +478,9 @@ class map : public swiss_map_base<
   }
 
   template <typename PS>
-  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) const {
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(
+    raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash
+  ) const {
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -490,14 +498,14 @@ class map : public swiss_map_base<
 
     auto [off, idx]{splice_pos<kernel_size>(pos)};
     NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
-    NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+    NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
     if (idx >= kernel_size - 1) {
       seq += kernel_size;
       if (NVHM_UNLIKELY_(!seq.has_next())) {
         return {npos, std::move(seq)};
       }
-      NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
       off = align_pos(seq.next(), bucket_mask);
       idx = -1;
     }
@@ -517,10 +525,10 @@ class map : public swiss_map_base<
 
       // Empty slots mark the end of a probe sequence.
       if (NVHM_LIKELY_(kernel_type::has_empty(k))) break;
-      
+
       seq += kernel_size;
       if (!seq.has_next()) break;
-      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+      NVHM_ASSERT_(seq.psl() < capacity(), "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
       off = align_pos(seq.next(), bucket_mask);
       k = kernel_type::load(&states[off]);
@@ -563,7 +571,9 @@ class map : public swiss_map_base<
   }
 
   template <typename Func>
-  NVHM_ALWAYS_INLINE constexpr void for_each_(const key_type& __restrict key, const hash_t hash, const Func& __restrict func) const {
+  NVHM_ALWAYS_INLINE constexpr void for_each_(
+    const key_type& __restrict key, const hash_t hash, const Func& __restrict func
+  ) const {
     static_assert(std::is_invocable_v<Func, raw_pos_t, probe_seq_type>, "`func` must be `func(raw_pos_t, probe_seq_type)`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -575,7 +585,7 @@ class map : public swiss_map_base<
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     for (; seq.has_next(); seq += kernel_size) {
-      NVHM_ASSERT_(seq.psl() < capacity(), "The table is full. This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+      NVHM_ASSERT_(seq.psl() < capacity(), "Table is full. Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
       const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
       const auto k{kernel_type::load(&states[off])};
@@ -626,7 +636,9 @@ class map : public swiss_map_base<
   }
 
   template <typename K>
-  NVHM_ALWAYS_INLINE constexpr std::tuple<raw_pos_t, probe_seq_type, insert_op_t> insert_(K&& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<raw_pos_t, probe_seq_type, insert_op_t> insert_(
+    K&& __restrict key, const hash_t hash
+  ) {
     static_assert(std::is_same_v<remove_cvref_t<K>, key_type>, "K must be `key_type`!");
     if constexpr (std::is_floating_point_v<key_type>) {
       if (key != key) {
@@ -641,7 +653,7 @@ class map : public swiss_map_base<
       end = resize_("Preemptive Grow", end << 1);
       NVHM_ASSERT_(!is_full_());
     }
-    
+
     const state_t s{hash_to_state(hash)};
     while (true) {
       const bitmask_t bucket_mask{make_aligned_mask<kernel_size>(end)};
@@ -654,11 +666,11 @@ class map : public swiss_map_base<
         raw_pos_t ins_pos{npos};
 
         for (; seq.has_next(); seq += kernel_size) {
-          NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+          NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
           const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
           const auto k{kernel_type::load(&states[off])};
-          
+
           if constexpr (!test_flags(flags, flags_t::duplicates)) {
             // Is the key present in this bucket?
             for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
@@ -690,7 +702,7 @@ class map : public swiss_map_base<
             auto m{kernel_type::mask_empty(k)};
             if (NVHM_UNLIKELY_(!mask_type::has_next(m))) continue;
           }
-          
+
           keys[ins_pos] = std::forward<K>(key);
           states[ins_pos] = s;
 
@@ -703,11 +715,11 @@ class map : public swiss_map_base<
       } else {
         // We have ensured that there are no tombstones. So, we can insert into the first available slot.
         for (; seq.has_next(); seq += kernel_size) {
-          NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+          NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
           const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
           const auto k{kernel_type::load(&states[off])};
-          
+
           if constexpr (!test_flags(flags, flags_t::duplicates)) {
             // Is the key present in this bucket?
             for (auto m{kernel_type::mask(k, s)}; mask_type::has_next(m); m = mask_type::step(m)) {
@@ -726,7 +738,7 @@ class map : public swiss_map_base<
 
           keys[pos] = std::forward<K>(key);
           states[pos] = s;
-          
+
           --num_empty_;
           NVHM_ASSERT_(check_integrity_());
           return {pos, std::move(seq), insert_op_t::insert};
@@ -773,7 +785,9 @@ class map : public swiss_map_base<
     return end;
   }
 
-  NVHM_ALWAYS_INLINE constexpr bool reset_slot_(raw_pos_t end, state_t& __restrict slot, const bool have_empty_neighbor) {
+  NVHM_ALWAYS_INLINE constexpr bool reset_slot_(
+    raw_pos_t end, state_t& __restrict slot, const bool have_empty_neighbor
+  ) {
     NVHM_ASSERT_(is_hash(slot));
 
     if (NVHM_LIKELY_(have_empty_neighbor)) {
@@ -827,7 +841,7 @@ class map : public swiss_map_base<
 
     const int_t blob_size{conf_.blob_size()};
     const int_t blob_stride{conf_.blob_stride()};
-    
+
     unique_ptr_t<value_type[], allocator_type> old_values_ptr{std::move(values_)};
     unique_ptr_t<std::byte[], allocator_type> old_blobs_ptr{std::move(blobs_)};
     unique_ptr_t<key_type[], allocator_type> old_keys_ptr{std::move(keys_)};
@@ -836,7 +850,7 @@ class map : public swiss_map_base<
     const std::byte* const __restrict old_blobs{old_blobs_ptr.get()};
     const key_type* const __restrict old_keys{old_keys_ptr.get()};
     const state_t* const __restrict old_states{old_states_ptr.get()};
-    
+
     for (;; end <<= 1) {
       __label__ next_old_pos, resize_error;
 
@@ -852,19 +866,19 @@ class map : public swiss_map_base<
       // Re-insert all KV-pairs, taking some shortcuts because no collisions are possible.
       for (raw_pos_t old_off{}; old_off < old_end; old_off += kernel_size) {
         const auto k_old{kernel_type::load(&old_states[old_off])};
-        
+
         for (auto m_old{kernel_type::mask_hash(k_old)}; mask_type::has_next(m_old); m_old = mask_type::step(m_old)) {
           const raw_pos_t old_pos{mask_type::next(m_old, old_off)};
           const hash_t hash{key_to_hash(old_keys[old_pos])};
 
           probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
           for (; seq.has_next(); seq += kernel_size) {
-            NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+            NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
             // TODO: Shouldn't there only be two offsets possible. Can't we exploit that?
             const raw_pos_t new_off{align_pos(seq.next(), bucket_mask)};
             const auto k_new{kernel_type::load(&new_states[new_off])};
-            
+
             for (auto m_new{kernel_type::mask_not_hash(k_new)}; NVHM_LIKELY_(mask_type::has_next(m_new)); m_new = mask_type::step(m_new)) {
               const raw_pos_t new_pos{mask_type::next(m_new, new_off)};
 
@@ -923,11 +937,13 @@ class map : public swiss_map_base<
     state_t* const __restrict states{states_.get()};
 
     // Scrubbing consists of two phases.
-    // 1. Re-insert KV-pairs upstream. As we try to reinsert KV-pairs upstream, we encounter a tombstone and replace it.
+    // 1. Re-insert KV-pairs upstream. As we try to reinsert KV-pairs upstream, we encounter a
+    //    tombstone and replace it.
     //    -- The original location has an adjacent empty slot. Then we can reclaim that slot.
     //    -- The original location has no adjacent empty slot. Then we just propagate the tombstone.
-    // 2. At the end, assuming that movements happend, we may be able to reclaim tombstones. This is possible because, we
-    //    are ensured that all valid KV-pairs are now in the most upstream location "permissible".
+    // 2. At the end, assuming that movements happend, we may be able to reclaim tombstones. This is
+    //    possible because, we are ensured that all valid KV-pairs are now in the most upstream
+    //    location "permissible".
     //    -- If all pairs are in the opitmal bucket (i.e. the PSL never exceeded 0), we can prune all tombstones.
     //    -- Otherwise, we can still prune tombstones in buckets that consist only of tombstones.
     int_t num_empty{num_empty_};
@@ -951,7 +967,7 @@ class map : public swiss_map_base<
 
           probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
           for (; seq.has_next(); seq += kernel_size) {
-            NVHM_ASSERT_(seq.psl() < end, "The table is full. This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+            NVHM_ASSERT_(seq.psl() < end, "Table is full. Should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
 
             const raw_pos_t new_off{align_pos(seq.next(), bucket_mask)};
             if (NVHM_LIKELY_(new_off == old_off)) goto next_old_pos;  // Already in the best possible bucket.
@@ -982,7 +998,7 @@ class map : public swiss_map_base<
               goto next_old_pos;
             }
           }
-          NVHM_ASSERT_(false, "Probe sequence has exhausted. This should not happen! (psl = ", seq.psl(), ", max_length = ", probe_seq_type::max_length, ')');
+          NVHM_ASSERT_(false, "Probe sequence has exhausted. Should not happen! (psl = ", seq.psl(), ", max_length = ", probe_seq_type::max_length, ')');
 
         next_old_pos:;
           psl_bits |= seq.psl();
@@ -1013,7 +1029,7 @@ class map : public swiss_map_base<
         for (raw_pos_t off{}; off < end; off += kernel_size) {
           auto k{kernel_type::load(&states[off])};
           if (kernel_type::has_not_tombstone(k)) continue;
-          
+
           std::fill_n(&states[off], kernel_size, kernel_type::empty);
           n += kernel_size;
         }
@@ -1053,8 +1069,7 @@ class map : public swiss_map_base<
 };
 
 template <
-  typename Key,
-  flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
+  typename Key, flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
   typename ProbeSeq = default_seq_t, typename Allocator = default_allocator_t>
 using set = map<Key, void, Flags & ~flags_t::blobs, Kernel, ProbeSeq, Allocator>;
 

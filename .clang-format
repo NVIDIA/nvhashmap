@@ -23,10 +23,10 @@ AllowShortIfStatementsOnASingleLine: true
 BracedInitializerIndentWidth: 2
 BreakConstructorInitializers: BeforeComma
 BreakTemplateDeclarations: true
-ColumnLimit: 100
+ColumnLimit: 120
 CommentPragmas: '^SPDX-FileCopyrightText:'
 CompactNamespaces: true
-ConstructorInitializerIndentWidth: 0
+ConstructorInitializerIndentWidth: 2
 ContinuationIndentWidth: 2
 DerivePointerAlignment: false
 DisableFormat: false
@@ -34,6 +34,7 @@ FixNamespaceComments: true
 IndentAccessModifiers: false
 IndentCaseLabels: true
 IndentGotoLabels: true
+IndentPPDirectives: BeforeHash
 IndentWidth: 2
 LambdaBodyIndentation: OuterScope
 Language: Cpp

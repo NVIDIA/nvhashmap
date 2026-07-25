@@ -140,6 +140,32 @@ endif()
 # Determine CPU features.
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX_FLAGS}")
+
+check_cxx_source_compiles("
+  #include <cstddef>
+  #if defined(__GLIBCXX__)
+  int main() { return 0; }
+  #else
+  #error Not libstdc++!
+  #endif" NVHM_HAVE_LIBSTDCXX
+)
+check_cxx_source_compiles("
+  #include <cstddef>
+  #if defined(_LIBCPP_VERSION)
+  int main() { return 0; }
+  #else
+  #error Not libc++!
+  #endif" NVHM_HAVE_LIBCXX
+)
+check_cxx_source_compiles("
+  #include <cstddef>
+  #if defined(_LIBCPP_HARDENING_MODE_EXTENSIVE)
+  int main() { return 0; }
+  #else
+  #error libc++ hardening modes not available!
+  #endif" NVHM_HAVE_LIBCXX_HARDENING
+)
+
 check_cxx_source_compiles("
   #if __SSE__
   int main() { return 0; }
@@ -258,6 +284,9 @@ else()
 endif()
 set(CMAKE_REQUIRED_FLAGS "")
 
+message(STATUS "NVHM_HAVE_LIBSTDCXX             = ${NVHM_HAVE_LIBSTDCXX}"            )
+message(STATUS "NVHM_HAVE_LIBCXX                = ${NVHM_HAVE_LIBCXX}"               )
+message(STATUS "NVHM_HAVE_LIBCXX_HARDENING      = ${NVHM_HAVE_LIBCXX_HARDENING}"     )
 message(STATUS "NVHM_HAVE_CACHE_LINE_SIZE       = ${NVHM_HAVE_CACHE_LINE_SIZE}"      )
 message(STATUS "NVHM_HAVE_PAGE_SIZE             = ${NVHM_HAVE_PAGE_SIZE}"            )
 message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE         = ${NVHM_HAVE_HUGEPAGE_SIZE}"        )
@@ -466,7 +495,7 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
 
     # https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html#aarch64-feature-modifiers
     set(NVHM_IMPLICT OFF)
-    if("${NVHM_AARCH_MAJOR}" STRGREATER "7")
+    if("${NVHM_AARCH_MAJOR}" GREATER "7")
       set(NVHM_IMPLICT ON)
     elseif("${NVHM_MARCH}" MATCHES "\\+simd")
       set(NVHM_IMPLICT ON)
@@ -478,7 +507,7 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
     unset(NVHM_IMPLICT)
 
     set(NVHM_IMPLICT OFF)
-    if("${NVHM_AARCH_MAJOR}" STRGREATER "8")
+    if("${NVHM_AARCH_MAJOR}" GREATER "8")
       set(NVHM_IMPLICT ON)
     elseif("${NVHM_MARCH}" MATCHES "\\+sve")
       set(NVHM_IMPLICT ON)
@@ -489,7 +518,7 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
     unset(NVHM_IMPLICT)
 
     set(NVHM_IMPLICT OFF)
-    if("${NVHM_AARCH_MAJOR}" STRGREATER "8")
+    if("${NVHM_AARCH_MAJOR}" GREATER "8")
       set(NVHM_IMPLICT ON)
     elseif("${NVHM_MARCH}" MATCHES "\\+sve2")
       set(NVHM_IMPLICT ON)

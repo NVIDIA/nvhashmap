@@ -19,17 +19,17 @@
 
 #include "common.hpp"
 
-#include <ratio>
 #include <memory>
+#include <ratio>
 #include <stdexcept>
 #include <sys/mman.h>
 
 namespace nvhm {
 
-template<typename T, typename Allocator>
+template <typename T, typename Allocator>
 using deleter_t = typename Allocator::template deleter_type<T>;
 
-template<typename T, typename Allocator>
+template <typename T, typename Allocator>
 using unique_ptr_t = std::unique_ptr<T, deleter_t<T, Allocator>>;
 
 template <typename T, typename Deleter>
@@ -123,7 +123,8 @@ class deleter_base {
   }
 
   constexpr void operator()(T* p) const {
-    if constexpr (!std::is_trivially_destructible_v<T>) {
+    // TODO: This is kind of a hack. We should switch having per entry lifetime management.
+    if constexpr (!std::is_trivially_default_constructible_v<T> && !std::is_trivially_destructible_v<T>) {
       std::destroy_n(p, n_);
     }
   }
@@ -142,7 +143,9 @@ class allocator_base {
 
 using default_switch_threshold = std::ratio<2, 3>;
 
-template <bool PageAlign = page_align_by_default, bool UseHugePages = use_hugepages_by_default, typename SwitchThreshold = default_switch_threshold>
+template <
+  bool PageAlign = page_align_by_default, bool UseHugePages = use_hugepages_by_default,
+  typename SwitchThreshold = default_switch_threshold>
 class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePages, SwitchThreshold>> {
  public:
   using base_type = allocator_base<std_allocator<PageAlign, UseHugePages, SwitchThreshold>>;
@@ -158,7 +161,7 @@ class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePage
 
     constexpr deleter() = default;
     constexpr deleter(int_t n) noexcept : base_type{n} {}
-  
+
     constexpr void operator()(T* p) const {
       base_type::operator()(p);
       std::free(p);
@@ -220,23 +223,23 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
    public:
     using base_type = deleter_base<T>;
     using allocator_type = mmap_allocator;
-   
+
     constexpr deleter() noexcept : base_type{}, n_bytes_{} {}
     constexpr deleter(int_t n, int_t n_bytes) noexcept : base_type{n}, n_bytes_{n_bytes} {
       NVHM_ASSERT_(n_bytes >= n * num_bytes_v<T>);
     }
-  
+
     constexpr void operator()(T* p) const {
       base_type::operator()(p);
       if (NVHM_UNLIKELY_(munmap(p, n_bytes_) != 0)) {
         NVHM_LOG_(log_level_t::error, "munmap failed, errno = ", errno);
       }
     }
-  
+
    protected:
     int_t n_bytes_;
   };
-  
+
   template <typename T>
   using deleter_type = deleter<std::conditional_t<std::is_array_v<T>, std::remove_extent_t<T>, T>>;
 
@@ -253,7 +256,7 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
 
     int flags{MAP_PRIVATE | MAP_ANONYMOUS};
     if constexpr (use_hugepages) {
-      if (align_size >= hugepage_size) {  
+      if (align_size >= hugepage_size) {
         flags |= MAP_HUGETLB;
         flags |= countr_zero(hugepage_size) << MAP_HUGE_SHIFT;
       }

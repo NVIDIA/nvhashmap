@@ -17,8 +17,8 @@
 
 #include <nvhashmap/prefetch.hpp>
 // clang-format off
-#include "compile_common.hpp"
 #include <nvhashmap/map.hpp>
+#include "compile_common.hpp"
 // clang-format on
 
 using namespace nvhm;

@@ -619,7 +619,6 @@ using fast_uint_kernel16_t = uint_kernel<__uint128_t, true>;
 
 }  // namespace nvhm
 
-
 #if NVHM_WITH_SSE || NVHM_WITH_AVX || NVHM_WITH_AVX512
 
 #if NVHM_WITH_AVX || NVHM_WITH_AVX512 || NVHM_WITH_AVX_FVL || NVHM_WITH_AVX_BWVL || NVHM_WITH_AVX_VBMI
@@ -651,7 +650,7 @@ struct sse_kernel final : public kernel<-128, -127, false> {
   constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = uint32_mask16_1r_t;
-  static_assert(mask_type::max_count == size && mask_type::max_num_bits == size * 2);
+  static_assert(mask_type::max_count == size && mask_type::num_bits_max == size * 2);
   using mask_repr_type = typename mask_type::repr_type;
 
   constexpr static mask_repr_type full_mask{mask_type::full()};
@@ -763,10 +762,10 @@ struct sse_kernel final : public kernel<-128, -127, false> {
     #if NVHM_WITH_AVX_BWVL
     return _mm_mask_set1_epi8(k, static_cast<__mmask16>(m), empty);
     #else
-    repr_type mx{_mm_set1_epi32(static_cast<int32_t>(m))}; // [01xy01xy 01xy01xy]
-    mx = _mm_unpacklo_epi8(mx, mx);  // [0011xxyy 0011xxyy]
-    mx = _mm_unpacklo_epi8(mx, mx);  // [00001111 xxxxyyyy]
-    mx = _mm_unpacklo_epi8(mx, mx);  // [00000000 11111111]
+    repr_type mx{_mm_set1_epi32(static_cast<int32_t>(m))};  // [01xy01xy 01xy01xy]
+    mx = _mm_unpacklo_epi8(mx, mx);                         // [0011xxyy 0011xxyy]
+    mx = _mm_unpacklo_epi8(mx, mx);                         // [00001111 xxxxyyyy]
+    mx = _mm_unpacklo_epi8(mx, mx);                         // [00000000 11111111]
     mx = _mm_and_si128(mx, _mm_set1_epi64x(static_cast<int64_t>(0x8040'2010'0804'0201)));
     mx = _mm_cmpeq_epi8(mx, _mm_setzero_si128());
     return blendv_epi8(_mm_set1_epi8(empty), k, mx);
@@ -808,7 +807,6 @@ struct sse_kernel final : public kernel<-128, -127, false> {
     s = _mm_set1_epi8(static_cast<char>(lru));
     #endif
     return {lru, mask_type::next(mask_equal(l, s))};
-
   }
 
   inline static mask_repr_type mask_min_lru(lru_repr_type l) noexcept {
@@ -1003,11 +1001,11 @@ struct avx_kernel final : public kernel<-128, -127, false> {
     #if NVHM_WITH_AVX_BWVL
     return _mm256_mask_set1_epi8(k, m, empty);
     #else
-    repr_type mx{_mm256_set1_epi32(static_cast<int32_t>(m))}; // [01230123 01230123 01230123 01230123]
-    mx = _mm256_unpacklo_epi8(mx, mx);  // [00112233 00112233 00112233 00112233]
-    mx = _mm256_unpacklo_epi8(mx, mx);  // [00001111 22223333 00001111 22223333]
+    repr_type mx{_mm256_set1_epi32(static_cast<int32_t>(m))};    // [01230123 01230123 01230123 01230123]
+    mx = _mm256_unpacklo_epi8(mx, mx);                           // [00112233 00112233 00112233 00112233]
+    mx = _mm256_unpacklo_epi8(mx, mx);                           // [00001111 22223333 00001111 22223333]
     mx = _mm256_permute4x64_epi64(mx, _MM_SHUFFLE(1, 1, 0, 0));  // [00001111 00001111 22223333 22223333]
-    mx = _mm256_unpacklo_epi8(mx, mx);  // [00000000 11111111 22222222 33333333]
+    mx = _mm256_unpacklo_epi8(mx, mx);                           // [00000000 11111111 22222222 33333333]
     mx = _mm256_and_si256(mx, _mm256_set1_epi64x(static_cast<int64_t>(0x8040'2010'0804'0201)));
     mx = _mm256_cmpeq_epi8(mx, _mm256_setzero_si256());
     return _mm256_blendv_epi8(_mm256_set1_epi8(empty), k, mx);
@@ -1266,9 +1264,8 @@ struct avx512_kernel final : public kernel<-128, -127, false> {
 
 using avx512_kernel_t = avx512_kernel;
 #endif
-}
+}  // namespace nvhm
 #endif
-
 
 #if NVHM_WITH_NEON
 #include <arm_neon.h>
@@ -1317,11 +1314,9 @@ struct neon_kernel<8> final : public kernel<-128, -127, false> {
 
   inline static mask_repr_type mask_hash(repr_type k) noexcept {
     return mask_not_hash(k) ^ full_mask;
-    //return full_mask & collapse_(vcgez_s8(k));
   }
   inline static mask_repr_type mask_not_hash(repr_type k) noexcept {
     return full_mask & collapse_(vreinterpret_u8_s8(k));
-    //return full_mask & collapse_(vcltz_s8(k));
   }
 
   inline static mask_repr_type mask_empty(repr_type k) noexcept { return mask(k, empty); }
@@ -1415,7 +1410,7 @@ struct neon_kernel<8> final : public kernel<-128, -127, false> {
     // Mask slots if they need rescaling.
     uint64x1_t r{vreinterpret_u64_u8(vceq_u8(l, vdup_n_u8(max_lru)))};
     r = vtst_u64(r, vreinterpret_u64_u8(nx));
-    
+
     // Rescale and increment.
     l = vshl_u8(l, vreinterpret_s8_u64(r));
     l = vsub_u8(l, nx);
@@ -1454,7 +1449,7 @@ struct neon_kernel<16> final : public kernel<-128, -127, false> {
 
   using mask_type = uint64_mask64_4r_t;
   static_assert(mask_type::max_count == size && mask_type::fully_utilized);
-  
+
   using mask_repr_type = typename mask_type::repr_type;
   static_assert(num_bytes_v<mask_repr_type> * 2 == size);
 
@@ -1621,7 +1616,7 @@ struct neon_kernel<32> final : public kernel<-128, -127, false> {
 
   using mask_type = uint64_mask64_2r_t;
   static_assert(mask_type::max_count == size && mask_type::fully_utilized);
-  
+
   using mask_repr_type = typename mask_type::repr_type;
   static_assert(num_bytes_v<mask_repr_type> * 4 == size);
 
@@ -1849,7 +1844,7 @@ struct neon_kernel<64> final : public kernel<-128, -127, false> {
 
   using mask_type = uint64_mask64_1r_t;
   static_assert(mask_type::max_count == size && mask_type::fully_utilized);
-  
+
   using mask_repr_type = typename mask_type::repr_type;
   static_assert(num_bytes_v<mask_repr_type> * 8 == size);
 
@@ -2150,7 +2145,6 @@ using neon_kernel64_t = neon_kernel<64>;
 }  // namespace nvhm
 #endif
 
-
 #if NVHM_WITH_SVE
 #include <arm_sve.h>
 
@@ -2340,7 +2334,7 @@ namespace nvhm {
 
 template <int_t Size>
 struct default_kernel;
-  
+
 template <>
 struct default_kernel<1> {
   // TODO: Prefer SVE if available?

@@ -22,7 +22,7 @@
 
 namespace nvhm {
 
-template<typename Mask>
+template <typename Mask>
 constexpr void mask_to_array(typename Mask::repr_type m, bool (&a)[Mask::max_count]) noexcept {
   using mask_t = Mask;
 
@@ -49,24 +49,10 @@ struct mask {
   NVHM_MAKE_NOT_INSTANTIABLE_(mask);
 };
 
-enum class mask_align_t {
+NVHM_MAKE_ENUM_(mask_align_t,
   left,
   right
-};
-
-constexpr const char* to_string(mask_align_t a) noexcept {
-  switch (a) {
-    case mask_align_t::left:
-      return "left";
-    case mask_align_t::right:
-      return "right";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, mask_align_t a) {
-  return os << to_string(a);
-}
+);
 
 template <int_t MaxCount>
 struct bitset_mask final : public mask {
@@ -74,7 +60,7 @@ struct bitset_mask final : public mask {
   static_assert(max_count > 0);
 
   using repr_type = std::bitset<to_uint(max_count)>;
-  
+
   NVHM_MAKE_NOT_INSTANTIABLE_(bitset_mask);
 
   constexpr static repr_type empty() noexcept { return {}; }
@@ -107,7 +93,7 @@ struct bitset_mask final : public mask {
 
   constexpr static repr_type intersect(const repr_type& m, const repr_type& n) noexcept { return m & n; }
   constexpr static repr_type join(const repr_type& m, const repr_type& n) noexcept { return m | n; }
-  constexpr static repr_type drop(const repr_type& m, const repr_type& n) noexcept {return m & ~n; }
+  constexpr static repr_type drop(const repr_type& m, const repr_type& n) noexcept { return m & ~n; }
   constexpr static bool contains(const repr_type& m, const repr_type& n) noexcept { return (m & n) == n; }
 
   constexpr static bool has_next(const repr_type& m) noexcept { return m.any(); }
@@ -116,7 +102,7 @@ struct bitset_mask final : public mask {
   constexpr static int_t next(const repr_type& m) noexcept {
     NVHM_ASSERT_(has_next(m));
     int_t i{};
-    for (; !m[to_uint(i)]; ++i) {}
+    while (!m[to_uint(i)]) ++i;
     return i;
   }
   constexpr static raw_pos_t next(const repr_type& m, raw_pos_t off) noexcept {
@@ -156,25 +142,26 @@ using bitset_mask128_t = bitset_mask<128>;
 using bitset_mask256_t = bitset_mask<256>;
 using bitset_mask512_t = bitset_mask<512>;
 
-template <typename Repr, int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
+template <typename Repr, int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
 struct uint_mask final : public mask {
   using repr_type = Repr;
   static_assert(is_unsigned_v<repr_type> && sizeof(repr_type) >= sizeof(uint32_t));
 
-  constexpr static int_t max_num_bits{num_bits_v<repr_type>};
-  static_assert(has_single_bit(max_num_bits));
+  constexpr static int_t num_bits_max{num_bits_v<repr_type>};
+  static_assert(has_single_bit(num_bits_max));
 
-  constexpr static int_t num_bits{NumBits};
-  static_assert(num_bits > 0 && num_bits <= max_num_bits);
-  static_assert(has_single_bit(num_bits));
+  constexpr static int_t num_bits_used{NumBitsUsed};
+  static_assert(num_bits_used > 0 && num_bits_used <= num_bits_max);
+  static_assert(has_single_bit(num_bits_used));
 
   constexpr static int_t bits_per_slot{BitsPerSlot};
   static_assert(bits_per_slot > 0 && bits_per_slot <= 8);
   static_assert(has_single_bit(bits_per_slot));
-  static_assert(num_bits % bits_per_slot == 0);
+  static_assert(num_bits_used % bits_per_slot == 0);
+
   constexpr static int_t shift{countr_zero(bits_per_slot)};
-  constexpr static int_t max_count{num_bits / bits_per_slot};
-  constexpr static bool fully_utilized{max_count * bits_per_slot == max_num_bits};
+  constexpr static int_t max_count{num_bits_used / bits_per_slot};
+  constexpr static bool fully_utilized{max_count * bits_per_slot == num_bits_max};
 
   constexpr static mask_align_t alignment{Alignment};
   static_assert(alignment == mask_align_t::left || alignment == mask_align_t::right);
@@ -210,11 +197,9 @@ struct uint_mask final : public mask {
   }
 
   constexpr static repr_type above(repr_type m, int_t i) noexcept {
-    //repr_type n{i < 0 ? empty() : (single(i) << 1) - 1};
     int_t i0{std::max(i, {})};
     repr_type n{single(i0, i0 == i) << 1};
     n -= i0 == i;
-    //repr_type n{(single(std::max(i, {}), i >= 0) << 1) - 1};
     return (m ^ n) & m;
   }
   constexpr static repr_type from(repr_type m, int_t i) noexcept {
@@ -229,31 +214,29 @@ struct uint_mask final : public mask {
 
   constexpr static bool has_next(repr_type m) noexcept { return m != 0; }
   constexpr static int_t count(repr_type m) noexcept { return popcount(m); }
-  static_assert(count(empty()) == 0);
-  static_assert(count(full()) == max_count);
+  static_assert(std_ext::popcount_fallback(empty()) == 0);
+  static_assert(std_ext::popcount_fallback(full()) == max_count);
 
   constexpr static int_t next(repr_type m) noexcept {
     NVHM_ASSERT_(has_next(m));
     return countr_zero(m) >> shift;
   }
-  constexpr static raw_pos_t next(repr_type m, raw_pos_t off) noexcept {
-    return off + next(m);
-  }
+  constexpr static raw_pos_t next(repr_type m, raw_pos_t off) noexcept { return off + next(m); }
 
   constexpr static repr_type step(repr_type m) noexcept { return m & (m - 1); }
-  constexpr static repr_type truncate(repr_type m) noexcept { return m ^ step(m); }  // return m & (m ^ (m - 1));
+  constexpr static repr_type truncate(repr_type m) noexcept { return m ^ step(m); }
 
   constexpr static bool at(repr_type m, int_t i) noexcept { return (m & single(i)) != 0; }
 };
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint32_mask_t = uint_mask<uint32_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint32_mask_t = uint_mask<uint32_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint64_mask_t = uint_mask<uint64_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint64_mask_t = uint_mask<uint64_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint128_mask_t = uint_mask<__uint128_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint128_mask_t = uint_mask<__uint128_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
 using uint32_mask1_1r_t = uint32_mask_t<1, 1, mask_align_t::right>;
 using uint32_mask1_1l_t = uint32_mask_t<1, 1, mask_align_t::left>;
@@ -408,12 +391,12 @@ using uint128_mask128_2l_t = uint128_mask_t<128, 2, mask_align_t::left>;
 using uint128_mask128_4l_t = uint128_mask_t<128, 4, mask_align_t::left>;
 using uint128_mask128_8l_t = uint128_mask_t<128, 8, mask_align_t::left>;
 
-template<int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint_mask_t = std::conditional_t<NumBits * BitsPerSlot <= num_bits_v<uint32_t>,
-  uint32_mask_t<NumBits, BitsPerSlot, Alignment>,
-  std::conditional_t<NumBits * BitsPerSlot <= num_bits_v<uint64_t>,
-    uint64_mask_t<NumBits, BitsPerSlot, Alignment>,
-    uint128_mask_t<NumBits, BitsPerSlot, Alignment>
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint_mask_t = std::conditional_t<NumBitsUsed <= num_bits_v<uint32_t>,
+  uint32_mask_t<NumBitsUsed, BitsPerSlot, Alignment>,
+  std::conditional_t<NumBitsUsed <= num_bits_v<uint64_t>,
+    uint64_mask_t<NumBitsUsed, BitsPerSlot, Alignment>,
+    uint128_mask_t<NumBitsUsed, BitsPerSlot, Alignment>
   >>;
 
 }
@@ -426,11 +409,11 @@ namespace nvhm {
 // TODO: Check if we should use `full` more often to avoid shuffling around p-registers that cannot be used as gate.
 template <int_t MaxCount>
 struct sve_mask final : public mask {
-#if defined(__ARM_FEATURE_SVE_BITS) && (NVHM_WITH_SVE_SIZE * 8 <= __ARM_FEATURE_SVE_BITS)
+  #if defined(__ARM_FEATURE_SVE_BITS) && (NVHM_WITH_SVE_SIZE * 8 <= __ARM_FEATURE_SVE_BITS)
   using repr_type = svbool_t __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
-#else
+  #else
   using repr_type = svbool_t;
-#endif
+  #endif
 
   constexpr static int_t max_count{MaxCount};
   static_assert(has_single_bit(max_count));
@@ -470,7 +453,7 @@ struct sve_mask final : public mask {
     NVHM_ASSERT_(i >= -1 && i < max_count);
     return svwhilele_b8_s64(0, i);
   }
-  
+
   inline static repr_type from(repr_type m, int_t i) noexcept { return drop(m, until(i)); }
   inline static repr_type above(repr_type m, int_t i) noexcept { return drop(m, to(i)); }
 
@@ -495,7 +478,7 @@ struct sve_mask final : public mask {
     // Of note: GCC won't optimize svcntp_b8(m, m) for some reason.
     return static_cast<int_t>(svcntp_b8(svptrue_b8(), m));
   }
-  
+
   inline static int_t next(repr_type m) noexcept {
     NVHM_ASSERT_(has_next(m));
     return count(svbrkb_b_z(full(), m));

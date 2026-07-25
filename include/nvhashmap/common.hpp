@@ -35,7 +35,7 @@ using bitmask_t = uint_t;
 constexpr int_t to_int(uint_t x) noexcept { return static_cast<int_t>(x); }
 constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
 
-} // namespace nvhm
+}  // namespace nvhm
 
 #include <functional>
 
@@ -50,44 +50,47 @@ constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
 #ifdef NVHM_ASSERT_
 #error NVHM_ASSERT_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_ASSERT_(_expr_, ...)                                           \
-  do {                                                                      \
-    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::prototype) {    \
-      if (NVHM_UNLIKELY_(!(_expr_))) {                                      \
-        std::ostream& os{nvhm::debug_stream()};                             \
-        nvhm::render_args(os,                                               \
-          "\nAssertion: ", #_expr_, " failed!",                             \
-          "\nLocation: ", __FUNCTION__, " (", __FILE__, ':', __LINE__, ')', \
-          "\nContext: ", ##__VA_ARGS__, "\n\n");                            \
-          if constexpr (nvhm::max_check_level >= nvhm::check_level_t::debug) { \
-            os.flush();                                                        \
-          }                                                                    \
-        std::abort();                                                       \
-      }                                                                     \
-    }                                                                       \
+#define NVHM_ASSERT_(_expr_, ...)                                            \
+  do {                                                                       \
+    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::prototype) { \
+      if (NVHM_UNLIKELY_(!(_expr_))) {                                       \
+        std::ostream& os{nvhm::debug_stream()};                              \
+        nvhm::render_args(os,                                                \
+          "\nAssertion: ", #_expr_, " failed!",                              \
+          "\nLocation: ", __FUNCTION__, " (", __FILE__, ':', __LINE__, ')',  \
+          "\nContext: ", ##__VA_ARGS__, "\n\n"                               \
+        );                                                                   \
+        if constexpr (nvhm::max_check_level >= nvhm::check_level_t::debug) { \
+          os.flush();                                                        \
+        }                                                                    \
+        std::abort();                                                        \
+      }                                                                      \
+    }                                                                        \
   } while (false)
 
 #ifdef NVHM_ASSUME_
 #error NVHM_ASSUME_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_ASSUME_(_expr_, ...) \
-  do {\
-    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::release) {\
-      if (NVHM_UNLIKELY_(!(_expr_))) {\
-        throw nvhm::logic_error("Assumption failed", __FILE__, __LINE__, __FUNCTION__, #_expr_, ##__VA_ARGS__);\
-      }\
-    }\
+#define NVHM_ASSUME_(_expr_, ...)                                                       \
+  do {                                                                                  \
+    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::release) {              \
+      if (NVHM_UNLIKELY_(!(_expr_))) {                                                  \
+        throw nvhm::logic_error(                                                        \
+          "Assumption failed", __FILE__, __LINE__, __FUNCTION__, #_expr_, ##__VA_ARGS__ \
+        );                                                                              \
+      }                                                                                 \
+    }                                                                                   \
   } while (false)
 
 #ifdef NVHM_LOG_
 #error NVHM_LOG_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_LOG_(_level_, ...) \
-  do {                        \
-    if constexpr ((_level_) <= nvhm::max_log_level) {\
-      std::ostream& os{nvhm::debug_stream()};                           \
-      nvhm::render_args(os, __FUNCTION__, " (", __FILE__, ':', __LINE__, "): ", ##__VA_ARGS__);\
-    }\
+#define NVHM_LOG_(_level_, ...)                                                                 \
+  do {                                                                                          \
+    if constexpr ((_level_) <= nvhm::max_log_level) {                                           \
+      std::ostream& os{nvhm::debug_stream()};                                                   \
+      nvhm::render_args(os, __FUNCTION__, " (", __FILE__, ':', __LINE__, "): ", ##__VA_ARGS__); \
+    }                                                                                           \
   } while (false)
 
 #ifdef NVHM_LIKELY_
@@ -103,10 +106,10 @@ constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
 #ifdef NVHM_MAKE_NOT_INSTANTIABLE_
 #error NVHM_MAKE_NOT_INSTANTIABLE_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_MAKE_NOT_INSTANTIABLE_(_class_) \
-  _class_() = delete; \
-  _class_(const _class_&) = delete; \
-  _class_(_class_&&) = delete; \
+#define NVHM_MAKE_NOT_INSTANTIABLE_(_class_)   \
+  _class_() = delete;                          \
+  _class_(const _class_&) = delete;            \
+  _class_(_class_&&) = delete;                 \
   _class_& operator=(const _class_&) = delete; \
   _class_& operator=(_class_&&) = delete;
 
@@ -141,15 +144,152 @@ constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
 #define NVHM_NO_INLINE_CALL
 #endif
 
+// clang-format off
+#ifdef NVHM_ARG_SELECT_
+#error NVHM_ARG_SELECT_ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_ARG_SELECT_(                                                                         \
+  _00_, _01_, _02_, _03_, _04_, _05_, _06_, _07_, _08_, _09_, _0A_, _0B_, _0C_, _0D_, _0E_, _0F_, \
+  _10_, _11_, _12_, _13_, _14_, _15_, _16_, _17_, _18_, _19_, _1A_, _1B_, _1C_, _1D_, _1E_, _1F_, \
+  _20_, _21_, _22_, _23_, _24_, _25_, _26_, _27_, _28_, _29_, _2A_, _2B_, _2C_, _2D_, _2E_, _2F_, \
+  _N_, ...) _N_
+
+#if                                                                                                                                                               \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_00_) || defined(NVHM_MAKE_ENUM_FOR_EACH_01_) || defined(NVHM_MAKE_ENUM_FOR_EACH_02_) || defined(NVHM_MAKE_ENUM_FOR_EACH_03_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_04_) || defined(NVHM_MAKE_ENUM_FOR_EACH_05_) || defined(NVHM_MAKE_ENUM_FOR_EACH_06_) || defined(NVHM_MAKE_ENUM_FOR_EACH_07_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_08_) || defined(NVHM_MAKE_ENUM_FOR_EACH_09_) || defined(NVHM_MAKE_ENUM_FOR_EACH_0A_) || defined(NVHM_MAKE_ENUM_FOR_EACH_0B_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_0C_) || defined(NVHM_MAKE_ENUM_FOR_EACH_0D_) || defined(NVHM_MAKE_ENUM_FOR_EACH_0E_) || defined(NVHM_MAKE_ENUM_FOR_EACH_0F_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_10_) || defined(NVHM_MAKE_ENUM_FOR_EACH_11_) || defined(NVHM_MAKE_ENUM_FOR_EACH_12_) || defined(NVHM_MAKE_ENUM_FOR_EACH_13_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_14_) || defined(NVHM_MAKE_ENUM_FOR_EACH_15_) || defined(NVHM_MAKE_ENUM_FOR_EACH_16_) || defined(NVHM_MAKE_ENUM_FOR_EACH_17_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_18_) || defined(NVHM_MAKE_ENUM_FOR_EACH_19_) || defined(NVHM_MAKE_ENUM_FOR_EACH_1A_) || defined(NVHM_MAKE_ENUM_FOR_EACH_1B_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_1C_) || defined(NVHM_MAKE_ENUM_FOR_EACH_1D_) || defined(NVHM_MAKE_ENUM_FOR_EACH_1E_) || defined(NVHM_MAKE_ENUM_FOR_EACH_1F_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_20_) || defined(NVHM_MAKE_ENUM_FOR_EACH_21_) || defined(NVHM_MAKE_ENUM_FOR_EACH_22_) || defined(NVHM_MAKE_ENUM_FOR_EACH_23_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_24_) || defined(NVHM_MAKE_ENUM_FOR_EACH_25_) || defined(NVHM_MAKE_ENUM_FOR_EACH_26_) || defined(NVHM_MAKE_ENUM_FOR_EACH_27_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_28_) || defined(NVHM_MAKE_ENUM_FOR_EACH_29_) || defined(NVHM_MAKE_ENUM_FOR_EACH_2A_) || defined(NVHM_MAKE_ENUM_FOR_EACH_2B_) || \
+  defined(NVHM_MAKE_ENUM_FOR_EACH_2C_) || defined(NVHM_MAKE_ENUM_FOR_EACH_2D_) || defined(NVHM_MAKE_ENUM_FOR_EACH_2E_) || defined(NVHM_MAKE_ENUM_FOR_EACH_2F_)
+#error NVHM_MAKE_ENUM_FOR_..._ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_MAKE_ENUM_FOR_EACH_00_(_F_, _type_name_, _value_) _F_(_type_name_, _value_)
+#define NVHM_MAKE_ENUM_FOR_EACH_01_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_00_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_02_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_01_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_03_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_02_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_04_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_03_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_05_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_04_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_06_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_05_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_07_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_06_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_08_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_07_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_09_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_08_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0A_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_09_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0B_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0A_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0C_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0B_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0D_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0C_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0E_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0D_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_0F_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0E_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_10_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_0F_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_11_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_10_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_12_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_11_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_13_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_12_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_14_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_13_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_15_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_14_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_16_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_15_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_17_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_16_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_18_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_17_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_19_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_18_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1A_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_19_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1B_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1A_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1C_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1B_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1D_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1C_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1E_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1D_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_1F_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1E_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_20_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_1F_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_21_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_20_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_22_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_21_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_23_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_22_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_24_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_23_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_25_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_24_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_26_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_25_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_27_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_26_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_28_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_27_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_29_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_28_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2A_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_29_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2B_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_2A_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2C_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_2B_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2D_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_2C_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2E_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_2D_(_F_, _type_name_, __VA_ARGS__)
+#define NVHM_MAKE_ENUM_FOR_EACH_2F_(_F_, _type_name_, _value_, ...) _F_(_type_name_, _value_) NVHM_MAKE_ENUM_FOR_EACH_2E_(_F_, _type_name_, __VA_ARGS__)
+
+#ifdef NVHM_MAKE_ENUM_FOR_EACH_
+#error NVHM_MAKE_ENUM_FOR_EACH_ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_MAKE_ENUM_FOR_EACH_(_F_, _type_name_, ...)                                                                 \
+  NVHM_ARG_SELECT_(__VA_ARGS__,                                                                                         \
+    NVHM_MAKE_ENUM_FOR_EACH_2F_, NVHM_MAKE_ENUM_FOR_EACH_2E_, NVHM_MAKE_ENUM_FOR_EACH_2D_, NVHM_MAKE_ENUM_FOR_EACH_2C_, \
+    NVHM_MAKE_ENUM_FOR_EACH_2B_, NVHM_MAKE_ENUM_FOR_EACH_2A_, NVHM_MAKE_ENUM_FOR_EACH_29_, NVHM_MAKE_ENUM_FOR_EACH_28_, \
+    NVHM_MAKE_ENUM_FOR_EACH_27_, NVHM_MAKE_ENUM_FOR_EACH_26_, NVHM_MAKE_ENUM_FOR_EACH_25_, NVHM_MAKE_ENUM_FOR_EACH_24_, \
+    NVHM_MAKE_ENUM_FOR_EACH_23_, NVHM_MAKE_ENUM_FOR_EACH_22_, NVHM_MAKE_ENUM_FOR_EACH_21_, NVHM_MAKE_ENUM_FOR_EACH_20_, \
+    NVHM_MAKE_ENUM_FOR_EACH_1F_, NVHM_MAKE_ENUM_FOR_EACH_1E_, NVHM_MAKE_ENUM_FOR_EACH_1D_, NVHM_MAKE_ENUM_FOR_EACH_1C_, \
+    NVHM_MAKE_ENUM_FOR_EACH_1B_, NVHM_MAKE_ENUM_FOR_EACH_1A_, NVHM_MAKE_ENUM_FOR_EACH_19_, NVHM_MAKE_ENUM_FOR_EACH_18_, \
+    NVHM_MAKE_ENUM_FOR_EACH_17_, NVHM_MAKE_ENUM_FOR_EACH_16_, NVHM_MAKE_ENUM_FOR_EACH_15_, NVHM_MAKE_ENUM_FOR_EACH_14_, \
+    NVHM_MAKE_ENUM_FOR_EACH_13_, NVHM_MAKE_ENUM_FOR_EACH_12_, NVHM_MAKE_ENUM_FOR_EACH_11_, NVHM_MAKE_ENUM_FOR_EACH_10_, \
+    NVHM_MAKE_ENUM_FOR_EACH_0F_, NVHM_MAKE_ENUM_FOR_EACH_0E_, NVHM_MAKE_ENUM_FOR_EACH_0D_, NVHM_MAKE_ENUM_FOR_EACH_0C_, \
+    NVHM_MAKE_ENUM_FOR_EACH_0B_, NVHM_MAKE_ENUM_FOR_EACH_0A_, NVHM_MAKE_ENUM_FOR_EACH_09_, NVHM_MAKE_ENUM_FOR_EACH_08_, \
+    NVHM_MAKE_ENUM_FOR_EACH_07_, NVHM_MAKE_ENUM_FOR_EACH_06_, NVHM_MAKE_ENUM_FOR_EACH_05_, NVHM_MAKE_ENUM_FOR_EACH_04_, \
+    NVHM_MAKE_ENUM_FOR_EACH_03_, NVHM_MAKE_ENUM_FOR_EACH_02_, NVHM_MAKE_ENUM_FOR_EACH_01_, NVHM_MAKE_ENUM_FOR_EACH_00_  \
+  )(_F_, _type_name_, __VA_ARGS__)
+
+#ifdef NVHM_MAKE_ENUM_TO_STR_CASE_
+#error NVHM_MAKE_ENUM_TO_STR_CASE_ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_MAKE_ENUM_TO_STR_CASE_(_type_name_, _value_) \
+  case _type_name_::_value_:                              \
+    if (array_equal(#_value_, "default_")) {              \
+      return "default";                                   \
+    }                                                     \
+    return #_value_;
+
+#ifdef NVHM_MAKE_ENUM_
+#error NVHM_MAKE_ENUM_ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_MAKE_ENUM_(_type_name_, ...)                                              \
+  enum class _type_name_ : int32_t {                                                   \
+    __VA_ARGS__                                                                        \
+  };                                                                                   \
+                                                                                       \
+  constexpr std::string_view to_string_view(const _type_name_ v) noexcept {            \
+    switch (v) {                                                                       \
+      NVHM_MAKE_ENUM_FOR_EACH_(NVHM_MAKE_ENUM_TO_STR_CASE_, _type_name_, __VA_ARGS__); \
+    }                                                                                  \
+    return "error";                                                                    \
+  }                                                                                    \
+                                                                                       \
+  inline std::string to_string(_type_name_ v) noexcept {                               \
+    return std::string{to_string_view(v)};                                             \
+  }                                                                                    \
+                                                                                       \
+  inline std::ostream& operator<<(std::ostream& os, _type_name_ v) {                   \
+    return os << to_string_view(v);                                                    \
+  }
+
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 
 namespace nvhm {
+
+template <int_t N, int_t M>
+constexpr bool array_equal(const char (&a)[N], const char (&b)[M]) noexcept {
+  if constexpr (N != M) return false;
+  for (int_t i{}; i < N; ++i) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
 
 template <typename T>
 constexpr static int_t num_bytes_v{sizeof(T)};
@@ -163,19 +303,19 @@ constexpr static int_t num_bits_v{num_bytes_v<T> * 8};
 template <typename>
 constexpr static bool dependent_false_v{false};
 
-enum class log_level_t : int_t {
-  error = 0,
-  warning = 1,
-  info = 2,
-  debug = 3,
-};
+NVHM_MAKE_ENUM_(log_level_t,
+  error,    // 0
+  warning,  // 1
+  info,     // 2
+  debug     // 3
+);
 
-enum class check_level_t : int_t {
-  none = 0,
-  release = 1,
-  prototype = 2,
-  debug = 3
-};
+NVHM_MAKE_ENUM_(check_level_t,
+  none,       // 0
+  release,    // 1
+  prototype,  // 2
+  debug       // 3
+);
 
 #if defined(NDEBUG)
 constexpr static bool is_debug_build{false};
@@ -198,9 +338,11 @@ constexpr std::ostream& render_args(std::ostream& os, Args&&... args) {
 class logic_error : public std::logic_error {
  public:
   template <typename... Args>
-  logic_error(const char reason[], const char file[], int_t line,  const char func[], const char expr[], Args&&... args)
-    : std::logic_error(build_message(reason, file, line, func, expr, std::forward<Args>(args)...)),
-    reason_(reason), file_(file), line_(line), func_(func), expr_(expr) {}
+  logic_error(
+    const char reason[], const char file[], int_t line, const char func[], const char expr[],
+    Args&&... args
+  ) : std::logic_error(build_message(reason, file, line, func, expr, std::forward<Args>(args)...))
+    , reason_(reason), file_(file), line_(line), func_(func), expr_(expr) {}
 
   const char* reason() const noexcept { return reason_; }
   const char* file() const noexcept { return file_; }
@@ -209,7 +351,10 @@ class logic_error : public std::logic_error {
   const char* expression() const noexcept { return expr_; }
 
   template <typename... Args>
-  static std::string build_message(const char reason[], const char file[], int_t line,  const char func[], const char expr[], Args&&... args) {
+  static std::string build_message(
+    const char reason[], const char file[], int_t line, const char func[], const char expr[],
+    Args&&... args
+  ) {
     std::ostringstream os;
     render_args(os, reason, " [", file, ':', line, " @ ", func, " -> ", expr, ']');
     if constexpr (sizeof...(Args) > 0) {
@@ -228,7 +373,7 @@ class logic_error : public std::logic_error {
 
 constexpr bitmask_t make_aligned_mask(int_t n, int_t alignment) noexcept {
   NVHM_ASSERT_(n > 0 && has_single_bit(n));
-  NVHM_ASSERT_(n > 0 && has_single_bit(alignment));
+  NVHM_ASSERT_(alignment > 0 && has_single_bit(alignment));
   NVHM_ASSERT_(n >= alignment, "n = ", n, ", alignment = ", alignment);
   NVHM_ASSERT_(n % alignment == 0, "n = ", n, ", alignment = ", alignment);
   return to_uint(n - alignment);
@@ -294,7 +439,9 @@ constexpr static T ceil_div(T x, T n) noexcept {
 }
 
 template <typename T>
-constexpr static T round_up(T x, T n) noexcept { return ceil_div(x, n) * n; }
+constexpr static T round_up(T x, T n) noexcept {
+  return ceil_div(x, n) * n;
+}
 
 template <int_t N>
 constexpr static int_t round_up(int_t x) noexcept {
@@ -337,20 +484,20 @@ constexpr std::enable_if_t<enum_bitmask_operators_v<T>, T> operator^(T a, T b) n
 
 template <typename T>
 constexpr std::enable_if_t<enum_bitmask_operators_v<T>, T&> operator&=(T& a, T b) noexcept {
-    a = a & b;
-    return a;
+  a = a & b;
+  return a;
 }
 
 template <typename T>
 constexpr std::enable_if_t<enum_bitmask_operators_v<T>, T&> operator|=(T& a, T b) noexcept {
-    a = a | b;
-    return a;
+  a = a | b;
+  return a;
 }
 
 template <typename T>
 constexpr std::enable_if_t<enum_bitmask_operators_v<T>, T&> operator^=(T& a, T b) noexcept {
-    a = a ^ b;
-    return a;
+  a = a ^ b;
+  return a;
 }
 
 template <typename>
@@ -414,25 +561,25 @@ constexpr raw_pos_t align_pos(raw_pos_t pos) noexcept {
 
 using psl_t = int_t;
 
-constexpr static psl_t inf_psl{std::numeric_limits<psl_t>::max()};
+constexpr static psl_t inf_psl{-1};
 
-template<typename InOutIt, typename Size, typename UnaryOp>
+template <typename InOutIt, typename Size, typename UnaryOp>
 constexpr InOutIt transform_n(InOutIt first, Size n, UnaryOp f) {
   return std::transform(first, first + n, first, f);
 }
 
-template<typename InIt0, typename InIt1, typename Size>
+template <typename InIt0, typename InIt1, typename Size>
 constexpr bool equal_n(InIt0 first0, InIt1 first1, Size n) {
   return std::equal(first0, first0 + n, first1);
 }
 
 enum class flags_t : uint_t {
   none = 0,
-  blobs = 1,  // The map allocates and maintains a blob storage.
-  duplicates = 2,  // The map/set allows duplicate keys.
+  blobs = 1,                // The map allocates and maintains a blob storage.
+  duplicates = 2,           // The map/set allows duplicate keys.
   aggressive_prefetch = 4,  // Be slightly more aggressive wehn prefetching.
-  auto_scrub = 8,  // Occasional stop-the-world `scrub` upon `erase` to speedup `find`.
-  auto_shrink = 16,  // Occasional stop-the-world `shrink` in `erase` to speedup `find`.
+  auto_scrub = 8,           // Occasional stop-the-world `scrub` upon `erase` to speedup `find`.
+  auto_shrink = 16,         // Occasional stop-the-world `shrink` in `erase` to speedup `find`.
   all = blobs | duplicates | aggressive_prefetch | auto_scrub | auto_shrink
 };
 static_assert(has_single_bit(static_cast<uint_t>(flags_t::blobs)));
@@ -580,7 +727,7 @@ struct func_traits : func_traits<decltype(&F::operator())> {};
 
 // For a `const` member `operator()`.
 template <typename C, typename Ret, typename... Args>
-struct func_traits<Ret(C::*)(Args...) const> {
+struct func_traits<Ret (C::*)(Args...) const> {
   using result_type = Ret;
 
   template <size_t I>
@@ -593,7 +740,7 @@ struct func_traits<Ret(C::*)(Args...) const> {
 
 // For a non-`const member `operator()`
 template <typename C, typename Ret, typename... Args>
-struct func_traits<Ret(C::*)(Args...)> {
+struct func_traits<Ret (C::*)(Args...)> {
   using result_type = Ret;
 
   template <size_t I>
@@ -606,7 +753,7 @@ struct func_traits<Ret(C::*)(Args...)> {
 
 // For free functions and function pointers.
 template <typename Ret, typename... Args>
-struct func_traits<Ret(*)(Args...)> {
+struct func_traits<Ret (*)(Args...)> {
   using result_type = Ret;
 
   template <size_t I>
@@ -620,30 +767,12 @@ struct func_traits<Ret(*)(Args...)> {
 template <typename F, size_t I>
 using arg_n_t = typename func_traits<std::decay_t<F>>::template arg<I>::type;
 
-enum arg_type_t {
+NVHM_MAKE_ENUM_(arg_type_t,
   value,
   lvalue_ref,
   const_lvalue_ref,
   rvalue_ref
-};
-
-constexpr const char* to_string(arg_type_t at) {
-  switch (at) {
-    case arg_type_t::value:
-      return "value";
-    case arg_type_t::lvalue_ref:
-      return "lvalue_ref";
-    case arg_type_t::const_lvalue_ref:
-      return "const_lvalue_ref";
-    case arg_type_t::rvalue_ref:
-      return "rvalue_ref";
-  }
-  return "error";
-}
-
-inline std::ostream& operator<<(std::ostream& os, arg_type_t at) {
-  return os << to_string(at);
-}
+);
 
 template <typename T>
 struct arg_type {

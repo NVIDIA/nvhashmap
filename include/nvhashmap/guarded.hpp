@@ -17,14 +17,13 @@
 
 #pragma once
 
-#include <mutex>
-#include <shared_mutex>
-#include "hash.hpp"
 #include "container.hpp"
+#include "hash.hpp"
+#include "mutex.hpp"
 
 namespace nvhm {
 
-using guarded_mutex_t = std::shared_mutex;
+using guarded_mutex_t = spin_wait_mutex<>;
 
 template <typename Inner> class guarded_read_pos;
 template <typename Inner> class guarded_write_pos;
@@ -61,7 +60,7 @@ class guarded_pos : public wrapped_pos<Inner> {
  protected:
   using base_type::inner_;
   lock_type lock_;
-  
+
   guarded_pos() = delete;
   constexpr explicit guarded_pos(const guarded_pos&) noexcept = default;
   constexpr guarded_pos& operator=(const guarded_pos&) noexcept = default;
@@ -77,6 +76,9 @@ class guarded_pos : public wrapped_pos<Inner> {
 
   template <typename>
   friend class guarded;
+
+  template <typename ReadPos, typename WriteInner>
+  friend ReadPos downgrade(guarded_write_pos<WriteInner>&&) noexcept;
 };
 
 template <typename Inner>
@@ -117,6 +119,11 @@ class guarded_write_pos : public guarded_pos<Inner, std::unique_lock<guarded_mut
     : base_type{std::move(inner), std::move(lock)} {}
 };
 
+template <typename ReadPos, typename WriteInner>
+[[nodiscard]] NVHM_ALWAYS_INLINE ReadPos downgrade(guarded_write_pos<WriteInner>&& pos) noexcept {
+  return ReadPos{downgrade<typename ReadPos::inner_type>(std::move(pos.inner_)), downgrade(std::move(pos.lock_))};
+}
+
 template <typename Inner>
 class guarded : public container<guarded<Inner>> {
  public:
@@ -153,7 +160,7 @@ class guarded : public container<guarded<Inner>> {
   using mutex_type = guarded_mutex_t;
   using read_lock_type = typename read_pos::lock_type;
   using write_lock_type = typename write_pos::lock_type;
-  
+
   using inner_const_iterator_type = typename inner_type::const_iterator;
   using inner_iterator_type = typename inner_type::iterator;
 
@@ -171,7 +178,7 @@ class guarded : public container<guarded<Inner>> {
     constexpr bool is_left() const noexcept { return inner_.is_left(); }
     constexpr bool is_right() const noexcept { return inner_.is_right(); }
 
-    constexpr self_type& operator++() { 
+    constexpr self_type& operator++() {
       NVHM_ASSUME_(lock_.owns_lock(), "Unsupported operation with this iterator!");
       ++inner_;
       return *self();
@@ -184,9 +191,10 @@ class guarded : public container<guarded<Inner>> {
 
     constexpr self_type& operator+=(difference_type n) {
       NVHM_ASSUME_(lock_.owns_lock(), "Unsupported operation with this iterator!");
-      inner_ += n; return *self();
+      inner_ += n;
+      return *self();
     }
-    
+
     template <typename RhsSelf, typename RhsInner, typename RhsLock>
     constexpr friend difference_type operator-(const iterator_base& lhs, const iterator_base<RhsSelf, RhsInner, RhsLock>& rhs) { return lhs.inner_ - rhs.inner_; }
 
@@ -322,7 +330,7 @@ class guarded : public container<guarded<Inner>> {
     }()} {}
   inline guarded& operator=(guarded&& other) {
     if (&other == this) return *self();
-    
+
     write_lock_type lock{mutex_, std::defer_lock};
     write_lock_type other_lock{other.mutex_, std::defer_lock};
     std::lock(lock, other_lock);
@@ -349,7 +357,7 @@ class guarded : public container<guarded<Inner>> {
     return inner_.all_values_for(key);
   }
 
-  template<typename InnerPos, typename Lock>
+  template <typename InnerPos, typename Lock>
   constexpr const_entry_type at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.at(pos.inner_);
@@ -368,7 +376,7 @@ class guarded : public container<guarded<Inner>> {
     return iterator{inner_.begin(), std::move(lock)};
   }
 
-  template<typename InnerPos, typename Lock>
+  template <typename InnerPos, typename Lock>
   constexpr const blob_t* blob_at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.blob_at(pos.inner_);
@@ -377,18 +385,18 @@ class guarded : public container<guarded<Inner>> {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.blob_at(pos.inner_);
   }
-  
-  template<typename InnerPos, typename Lock>
+
+  template <typename InnerPos, typename Lock>
   constexpr int_t bucket_size_at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.bucket_size_at(pos.inner_);
   }
-  template<typename InnerPos, typename Lock>
+  template <typename InnerPos, typename Lock>
   constexpr int_t bucket_num_empty_slots_at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.bucket_num_empty_slots_at(pos.inner_);
   }
-  template<typename InnerPos, typename Lock>
+  template <typename InnerPos, typename Lock>
   constexpr int_t bucket_num_tombstone_slots_at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.bucket_num_tombstone_slots_at(pos.inner_);
@@ -398,7 +406,7 @@ class guarded : public container<guarded<Inner>> {
     read_lock_type lock{lock_()};
     return inner_.capacity();
   }
-  
+
   constexpr const_iterator cbegin() const { return begin(); }
   constexpr const_iterator cend() const { return end(); }
 
@@ -426,7 +434,7 @@ class guarded : public container<guarded<Inner>> {
     read_lock_type lock{lock_()};
     return inner_.contains(key, hint.inner());
   }
-  template<typename InnerPos, typename Lock>
+  template <typename InnerPos, typename Lock>
   constexpr bool contains_at(const pos<InnerPos, Lock>& pos) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return inner_.contains_at(pos.inner_);
@@ -442,15 +450,13 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos&) -> bool");
 
     read_lock_type lock{lock_()};
-    return inner_.count_if(
-      [&](inner_read_pos_type&& pos) {
-        read_pos r_lock{std::move(pos), std::move(lock)};
-        bool res{pred(r_lock)};
-        pos = std::move(r_lock.inner_);
-        lock = std::move(r_lock.lock_);
-        return res;
-      }
-    );
+    return inner_.count_if([&](inner_read_pos_type&& pos) {
+      read_pos r_lock{std::move(pos), std::move(lock)};
+      bool res{pred(r_lock)};
+      pos = std::move(r_lock.inner_);
+      lock = std::move(r_lock.lock_);
+      return res;
+    });
   }
   constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const {
     read_lock_type lock{lock_()};
@@ -515,15 +521,13 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos&) -> bool");
 
     write_lock_type lock{lock_()};
-    return inner_.erase_if(
-      [&](inner_write_pos_type&& pos) {
-        write_pos w_lock{std::move(pos), std::move(lock)};
-        bool res{pred(w_lock)};
-        pos = std::move(w_lock.inner_);
-        lock = std::move(w_lock.lock_);
-        return res;
-      }
-    );
+    return inner_.erase_if([&](inner_write_pos_type&& pos) {
+      write_pos w_lock{std::move(pos), std::move(lock)};
+      bool res{pred(w_lock)};
+      pos = std::move(w_lock.inner_);
+      lock = std::move(w_lock.lock_);
+      return res;
+    });
   }
   constexpr int_t erase_all(const key_type& key) {
     write_lock_type lock{lock_()};
@@ -559,12 +563,7 @@ class guarded : public container<guarded<Inner>> {
   }
   template <typename PS>
   constexpr std::pair<read_pos, probe_seq_type> find_next(write_pos&& pos, PS&& seq, const key_type& key) const {
-    NVHM_ASSUME_(pos.mutex_() == &mutex_);
-    pos.lock_.unlock();  // Not ideal but the best we can do without downgradable locks.
-    read_lock_type lock{lock_()};
-
-    auto [p, s]{inner_.find_next(pos.inner_, std::forward<PS>(seq), key)};
-    return {read_pos{std::move(p), std::move(lock)}, std::move(s)};
+    return find_next(downgrade<read_pos>(std::move(pos)), std::forward<PS>(seq), key);
   }
   template <typename PS>
   constexpr std::pair<read_pos, probe_seq_type> find_next(read_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
@@ -575,12 +574,7 @@ class guarded : public container<guarded<Inner>> {
   }
   template <typename PS>
   constexpr std::pair<read_pos, probe_seq_type> find_next(write_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
-    NVHM_ASSUME_(pos.mutex_() == &mutex_);
-    pos.lock_.unlock();  // Not ideal but the best we can do without downgradable locks.
-    read_lock_type lock{lock_()};
-
-    auto [p, s]{inner_.find_next(pos.inner_, std::forward<PS>(seq), key, hint.inner())};
-    return {read_pos{std::move(p), std::move(lock)}, std::move(s)};
+    return find_next(downgrade<read_pos>(std::move(pos)), std::forward<PS>(seq), key, hint);
   }
   template <typename Pred>
   constexpr read_pos find_if(const Pred& pred) const {
@@ -588,15 +582,13 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos&) -> bool");
 
     read_lock_type lock{lock_()};
-    inner_read_pos_type pos{inner_.find_if(
-      [&](inner_read_pos_type&& pos) {
-        read_pos r_lock{std::move(pos), std::move(lock)};
-        bool res{pred(r_lock)};
-        pos = std::move(r_lock.inner_);
-        lock = std::move(r_lock.lock_);
-        return res;
-      }
-    )};
+    inner_read_pos_type pos{inner_.find_if([&](inner_read_pos_type&& pos) {
+      read_pos r_lock{std::move(pos), std::move(lock)};
+      bool res{pred(r_lock)};
+      pos = std::move(r_lock.inner_);
+      lock = std::move(r_lock.lock_);
+      return res;
+    })};
     return read_pos{std::move(pos), std::move(lock)};
   }
   constexpr std::vector<read_pos> find_all(const key_type& key) const {
@@ -624,14 +616,12 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const read_pos&)`!");
 
     read_lock_type lock{lock_()};
-    inner_.for_each(
-      [&](inner_read_pos_type&& pos) {
-        read_pos r_lock{std::move(pos), std::move(lock)};
-        func(r_lock);
-        pos = std::move(r_lock.inner_);
-        lock = std::move(r_lock.lock_);
-      }
-    );
+    inner_.for_each([&](inner_read_pos_type&& pos) {
+      read_pos r_lock{std::move(pos), std::move(lock)};
+      func(r_lock);
+      pos = std::move(r_lock.inner_);
+      lock = std::move(r_lock.lock_);
+    });
   }
   template <typename Func>
   constexpr void for_each(const Func& func) {
@@ -641,14 +631,12 @@ class guarded : public container<guarded<Inner>> {
       static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const write_pos&)`!");
 
       write_lock_type lock{lock_()};
-      inner_.for_each(
-        [&](inner_write_pos_type&& pos) {
-          write_pos w_lock{std::move(pos), std::move(lock)};
-          func(w_lock);
-          pos = std::move(w_lock.inner_);
-          lock = std::move(w_lock.lock_);
-        }
-      );
+      inner_.for_each([&](inner_write_pos_type&& pos) {
+        write_pos w_lock{std::move(pos), std::move(lock)};
+        func(w_lock);
+        pos = std::move(w_lock.inner_);
+        lock = std::move(w_lock.lock_);
+      });
     } else {
       static_assert(dependent_false_v<Func>, "`func` must be `func(const read_pos&)` or `func(const write_pos&)`!");
     }
@@ -705,14 +693,12 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const read_pos&, probe_seq_type)`!");
 
     read_lock_type lock{lock_()};
-    inner_.for_each(key,
-      [&](inner_read_pos_type&& pos, const probe_seq_type& seq) { 
-        read_pos r_lock{std::move(pos), std::move(lock)};
-        func(r_lock, seq);
-        pos = std::move(r_lock.inner_);
-        lock = std::move(r_lock.lock_);
-      }
-    );
+    inner_.for_each(key, [&](inner_read_pos_type&& pos, const probe_seq_type& seq) {
+      read_pos r_lock{std::move(pos), std::move(lock)};
+      func(r_lock, seq);
+      pos = std::move(r_lock.inner_);
+      lock = std::move(r_lock.lock_);
+    });
   }
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) {
@@ -722,14 +708,12 @@ class guarded : public container<guarded<Inner>> {
       static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const write_pos&, probe_seq_type)`!");
 
       write_lock_type lock{lock_()};
-      inner_.for_each(key,
-        [&](inner_write_pos_type&& pos, const probe_seq_type& seq) {
-          write_pos w_lock{std::move(pos), std::move(lock)};  
-          func(w_lock, seq);
-          pos = std::move(w_lock.inner_);
-          lock = std::move(w_lock.lock_);
-        }
-      );
+      inner_.for_each(key, [&](inner_write_pos_type&& pos, const probe_seq_type& seq) {
+        write_pos w_lock{std::move(pos), std::move(lock)};
+        func(w_lock, seq);
+        pos = std::move(w_lock.inner_);
+        lock = std::move(w_lock.lock_);
+      });
     } else {
       static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos, probe_seq_type)` or `func(const write_pos&, probe_seq_type)`!");
     }
@@ -866,7 +850,10 @@ class guarded : public container<guarded<Inner>> {
     inner_.read_prefetch_blob_at(pos.inner_);
   }
 
-  constexpr void render(std::ostream& os, bool with_values = has_values, blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide) const {
+  constexpr void render(
+    std::ostream& os, bool with_values = has_values,
+    blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide
+  ) const {
     read_lock_type lock{lock_()};
     return inner_.render(os, with_values, with_blobs);
   }
@@ -933,12 +920,8 @@ class guarded : public container<guarded<Inner>> {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
     return iterator{inner_.to_iterator(std::move(pos.inner_)), std::move(pos.lock_)};
   }
-  constexpr const_iterator to_citerator(read_pos&& pos) const {
-    return to_iterator(std::move(pos));
-  }
-  constexpr const_iterator to_citerator(write_pos&& pos) const {
-    return to_iterator(std::move(pos));
-  }
+  constexpr const_iterator to_citerator(read_pos&& pos) const { return to_iterator(std::move(pos)); }
+  constexpr const_iterator to_citerator(write_pos&& pos) const { return to_iterator(std::move(pos)); }
 
   constexpr write_pos update(const key_type& key) {
     write_lock_type lock{lock_()};
@@ -976,15 +959,13 @@ class guarded : public container<guarded<Inner>> {
     static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos&) -> bool");
 
     write_lock_type lock{lock_()};
-    inner_write_pos_type pos{inner_.update_if(
-      [&](inner_write_pos_type&& pos) {
-        write_pos w_lock{std::move(pos), std::move(lock)};
-        bool res{pred(w_lock)};
-        pos = std::move(w_lock.inner_);
-        lock = std::move(w_lock.lock_);
-        return res;
-      }
-    )};
+    inner_write_pos_type pos{inner_.update_if([&](inner_write_pos_type&& pos) {
+      write_pos w_lock{std::move(pos), std::move(lock)};
+      bool res{pred(w_lock)};
+      pos = std::move(w_lock.inner_);
+      lock = std::move(w_lock.lock_);
+      return res;
+    })};
     return write_pos{std::move(pos), std::move(lock)};
   }
   constexpr std::vector<write_pos> update_all(const key_type& key) {
@@ -1042,7 +1023,7 @@ class guarded : public container<guarded<Inner>> {
   constexpr mapped_type operator[](K&&) {
     throw std::runtime_error("`guarded` does not support this operator[] access!");
   }
-  
+
   constexpr friend bool operator==(const guarded& lhs, const guarded& rhs) {
     if (&lhs == &rhs) return true;
 
@@ -1059,7 +1040,7 @@ class guarded : public container<guarded<Inner>> {
 
     write_lock_type lhs_lock{lhs.mutex_, std::defer_lock};
     write_lock_type rhs_lock{rhs.mutex_, std::defer_lock};
-    std::lock(lhs_lock, rhs_lock);  
+    std::lock(lhs_lock, rhs_lock);
 
     swap(lhs.inner_, rhs.inner_);
   }

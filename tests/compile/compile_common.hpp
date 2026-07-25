@@ -101,7 +101,7 @@ int compile_map(Args&&... args) {
 
   write_pos_t w_pos{map.insert(k)};
   prefetch_hint_t hint{map.read_prefetch(k)};
-  read_pos_t r_pos{map.find(k)};
+  read_pos_t r_pos{downgrade<read_pos_t>(std::move(w_pos))};
   const_iterator_t cit{cmap.begin()};
   iterator_t it{map.begin()};
   probe_seq_t seq{std::get<2>(map.erase_first(k))};

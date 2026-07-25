@@ -20,12 +20,12 @@
 #include <nvhashmap/probe_seq.hpp>
 
 using namespace nvhm;
-#include "utils.hpp"
+#include "tools_common.hpp"
 
 int_t init_capacity{1};
 int_t num_keys{940'000};
 key_source_t key_source{key_source_t::polynomial};
-int_t key_c[]{13, 3, 7};
+std::array<int_t, 3> key_poly{13, 3, 7};
 int_t test_interval{50'000};
 std::size_t seed{rd()};
 
@@ -39,7 +39,7 @@ NVHM_NO_INLINE void fill_and_count_probe_seq_lengths() {
 
   std::mt19937_64 rng{seed};
 
-  std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_c, rng)};
+  std::vector<key_t> keys{make_keys<key_t>(num_keys, key_source, key_poly, rng)};
   std::cout
     << type_to_string<set_t>() << ", probe sequence lengths @ "
     << test_interval << " interval (num_keys = " << num_keys << ")\n";
@@ -252,16 +252,14 @@ int main(int argc, char* argv[]) {
   nvhm_type_t nvhm_type{nvhm_type_t::map};
   probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
 
-  app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
+  app.add_option("--key_type", key_type, "Key type")->capture_default_str()->transform(key_type_t_validator);
   app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
-  app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
-  app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
-  app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
+  app.add_option("--key_source", key_source, "Key source")->capture_default_str()->transform(key_source_t_validator);
+  app.add_option("--key_poly", key_poly, "Key coefficients for polynomial key source\n(c0 + c1 * x + c2 * x^2)")->delimiter(',')->capture_default_str();
   app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->capture_default_str();
-  app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->default_str(to_string(nvhm_type))->transform(CLI::CheckedTransformer(str_to_nvhm_type, CLI::ignore_case));
-  app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
-  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));
+  app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->capture_default_str()->transform(nvhm_type_t_validator);
+  app.add_option("--kernel_type", kernel_type, "Kernel type")->capture_default_str()->transform(kernel_type_t_validator);
+  app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->capture_default_str()->transform(probe_seq_type_t_validator);
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
 
   argv = app.ensure_utf8(argv);

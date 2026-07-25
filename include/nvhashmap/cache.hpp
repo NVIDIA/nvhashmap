@@ -17,13 +17,13 @@
 
 #pragma once
 
-#include "swiss_map_base.hpp"
 #include "conf.hpp"
 #include "probe_seq.hpp"
+#include "swiss_map_base.hpp"
 
 namespace nvhm {
 
-template<int_t Size>
+template <int_t Size>
 constexpr raw_pos_t pos_to_pos2(raw_pos_t pos) noexcept {
   constexpr bitmask_t mask{size_mask_v<Size>};
   return pos + align_pos<~mask>(pos);
@@ -34,14 +34,15 @@ constexpr raw_pos_t pos_to_pos2(raw_pos_t pos) noexcept {
  * The kernel size determines the set-associativity.
  */
 template <
-  typename Key, typename Value = void, flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
-  typename Allocator = default_allocator_t>
+  typename Key, typename Value = void, flags_t Flags = flags_t::none,
+  typename Kernel = default_kernel_t<>, typename Allocator = default_allocator_t>
 class cache : public swiss_map_base<
   cache<Key, Value, Flags, Kernel, Allocator>,
   conf<Key, Value, Flags, Kernel::size>, linear_seq<0, Kernel::size>, Allocator
 > {
  public:
-  using base_type = swiss_map_base<cache, conf<Key, Value, Flags, Kernel::size>, linear_seq<0, Kernel::size>, Allocator>;
+  using base_type = swiss_map_base<
+    cache, conf<Key, Value, Flags, Kernel::size>, linear_seq<0, Kernel::size>, Allocator>;
 
   using self_type = typename base_type::self_type;
   using conf_type = typename base_type::conf_type;
@@ -60,7 +61,7 @@ class cache : public swiss_map_base<
   using kernel_type = Kernel;
   static_assert(kernel_type::size == conf_type::kernel_size);
   using mask_type = typename kernel_type::mask_type;
-  
+
   constexpr cache(const cache& other) : base_type{other} {
     states_and_lrus_ = make_copy(other.states_and_lrus_, capacity() * 2);
     num_empty_ = other.num_empty_;
@@ -101,7 +102,7 @@ class cache : public swiss_map_base<
  protected:
   template <typename, typename, typename, typename>
   friend class raw_map_base;
-  template <typename, typename, typename, typename> 
+  template <typename, typename, typename, typename>
   friend class swiss_map_base;
 
   using base_type::conf_;
@@ -150,15 +151,15 @@ class cache : public swiss_map_base<
     // TODO: Add optimized kernel function for this?
     return mask_type::count(kernel_type::mask_tombstone(k));
   }
-  
+
   NVHM_ALWAYS_INLINE constexpr bool check_integrity_() const noexcept {
     const int_t end{capacity()};
     const state_t* const __restrict states{states_()};
-    
+
     int_t num_empty{};
     for (raw_pos_t off{}; off < end; off += kernel_size) {
       const auto k{kernel_type::load(&states[off * 2])};
-      
+
       // TODO: Add optimized kernel function for this?
       num_empty += mask_type::count(kernel_type::mask_empty(k));
     }
@@ -190,7 +191,9 @@ class cache : public swiss_map_base<
     }
   }
 
-  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(const key_type& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_first_(
+    const key_type& __restrict key, const hash_t hash
+  ) {
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
     const bitmask_t bucket_mask{bucket_mask_};
@@ -200,8 +203,8 @@ class cache : public swiss_map_base<
     const state_t s{hash_to_state(hash)};
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
-    
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     const auto k{kernel_type::load(&states[off * 2])};
 
@@ -219,7 +222,9 @@ class cache : public swiss_map_base<
   }
 
   template <typename PS>
-  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) {
+  NVHM_ALWAYS_INLINE constexpr std::tuple<bool, raw_pos_t, probe_seq_type> erase_next_(
+    raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash
+  ) {
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -237,7 +242,7 @@ class cache : public swiss_map_base<
 
     auto [off, idx]{splice_pos<kernel_size>(pos)};
     NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
-    NVHM_ASSERT_(seq.psl() < end, "This should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
+    NVHM_ASSERT_(seq.psl() < end, "Should not happen! (psl = ", seq.psl(), ", capacity = ", end, ')');
 
     auto k{kernel_type::load(&states[off * 2])};
 
@@ -264,7 +269,7 @@ class cache : public swiss_map_base<
       reset_slot_(states[pos2]);
       return {true, pos};
     }
-  
+
     return {false, pos};
   }
 
@@ -304,8 +309,8 @@ class cache : public swiss_map_base<
 
     int_t num_empty{num_empty_};
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
-    
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     const auto k{kernel_type::load(&states[off * 2])};
 
@@ -325,7 +330,9 @@ class cache : public swiss_map_base<
     return num_erased;
   }
 
-  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_first_(const key_type& __restrict key, const hash_t hash) const {
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_first_(
+    const key_type& __restrict key, const hash_t hash
+  ) const {
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
     const bitmask_t bucket_mask{bucket_mask_};
@@ -336,7 +343,7 @@ class cache : public swiss_map_base<
     const state_t s{hash_to_state(hash)};
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     const auto k{kernel_type::load(&states[off * 2])};
@@ -357,7 +364,9 @@ class cache : public swiss_map_base<
   }
 
   template <typename PS>
-  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash) const {
+  NVHM_ALWAYS_INLINE constexpr std::pair<raw_pos_t, probe_seq_type> find_next_(
+    raw_pos_t pos, PS&& __restrict seq, const key_type& __restrict key, const hash_t hash
+  ) const {
     static_assert(std::is_same_v<remove_cvref_t<PS>, probe_seq_type>, "`PS` must be `probe_seq_type`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -375,7 +384,7 @@ class cache : public swiss_map_base<
 
     auto [off, idx]{splice_pos<kernel_size>(pos)};
     NVHM_ASSERT_(seq.has_next() && align_pos(seq.next(), bucket_mask) == off);
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
     const auto k{kernel_type::load(&states[off * 2])};
 
@@ -399,7 +408,7 @@ class cache : public swiss_map_base<
     const raw_pos_t end{capacity()};
     const state_t* const __restrict states{states_()};
     lru_t* const __restrict lrus{lrus_()};
-    
+
     for (raw_pos_t off{}; off < end; off += kernel_size) {
       const auto k{kernel_type::load(&states[off * 2])};
 
@@ -421,7 +430,7 @@ class cache : public swiss_map_base<
   NVHM_ALWAYS_INLINE constexpr void for_each_(const Func& __restrict func) const {
     const raw_pos_t end{capacity()};
     const state_t* const __restrict states{states_()};
-    
+
     for (raw_pos_t off{}; off < end; off += kernel_size) {
       const auto k{kernel_type::load(&states[off * 2])};
 
@@ -463,7 +472,9 @@ class cache : public swiss_map_base<
   }
 
   template <typename Func>
-  NVHM_ALWAYS_INLINE constexpr void for_each_(const key_type& __restrict key, const hash_t hash, const Func& __restrict func) const {
+  NVHM_ALWAYS_INLINE constexpr void for_each_(
+    const key_type& __restrict key, const hash_t hash, const Func& __restrict func
+  ) const {
     static_assert(std::is_invocable_v<Func, raw_pos_t, probe_seq_type>, "`func` must be `func(raw_pos_t, probe_seq_type)`!");
     NVHM_ASSERT_(key_to_hash(key) == hash, "Supplied key and hash do not match!");
 
@@ -475,7 +486,7 @@ class cache : public swiss_map_base<
     const state_t s{hash_to_state(hash)};
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", capacity = ", capacity(), ')');
 
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     const auto k{kernel_type::load(&states[off * 2])};
@@ -514,7 +525,7 @@ class cache : public swiss_map_base<
     const state_t s{hash_to_state(hash)};
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-    NVHM_ASSERT_(seq.psl() < capacity(), "This should not happen! (psl = ", seq.psl(), ", end = ", capacity(), ')');
+    NVHM_ASSERT_(seq.psl() < capacity(), "Should not happen! (psl = ", seq.psl(), ", end = ", capacity(), ')');
 
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     const auto k{kernel_type::load(&states[off * 2])};
@@ -582,7 +593,7 @@ class cache : public swiss_map_base<
     for (raw_pos_t off{}; off < end; off += kernel_size) {
       std::fill_n(&states[off * 2], kernel_size, kernel_type::empty);
       std::fill_n(&lrus[off * 2], kernel_size, max_lru);
-    } 
+    }
     num_empty_ = end;
     NVHM_ASSERT_(check_integrity_());
 
@@ -631,7 +642,7 @@ class cache : public swiss_map_base<
     key_type* const __restrict keys{keys_.get()};
     state_t* const __restrict states{states_()};
     lru_t* const __restrict lrus{lrus_()};
-    
+
     int_t num_insert{};
     for (raw_pos_t old_off{}; old_off < old_end; old_off += kernel_size) {
       const auto k_old{kernel_type::load(&old_states[old_off * 2])};
@@ -639,14 +650,14 @@ class cache : public swiss_map_base<
       for (auto m_old{kernel_type::mask_hash(k_old)}; mask_type::has_next(m_old); m_old = mask_type::step(m_old)) {
         const int_t old_idx{mask_type::next(m_old)};
         const raw_pos_t old_pos{old_off + old_idx};
-        
+
         const lru_t old_lru{old_lrus[old_off * 2 + old_idx]};
         const hash_t hash{key_to_hash(old_keys[old_pos])};
 
         const probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
-        NVHM_ASSERT_(seq.psl() < end, "This should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
+        NVHM_ASSERT_(seq.psl() < end, "Should not happen! (psl = ", seq.psl(), ", end = ", end, ')');
         const raw_pos_t new_off{align_pos(seq.next(), bucket_mask)};
-        
+
         // Have slot available?
         const auto k_new{kernel_type::load(&states[new_off * 2])};
         auto m_new{kernel_type::mask_not_hash(k_new)};
@@ -740,9 +751,8 @@ class cache : public swiss_map_base<
 };
 
 template <
-  typename Key,
-  flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
+  typename Key, flags_t Flags = flags_t::none, typename Kernel = default_kernel_t<>,
   typename Allocator = default_allocator_t>
 using cache_set = cache<Key, void, Flags & ~flags_t::blobs, Kernel, Allocator>;
 
-}
+}  // namespace nvhm
