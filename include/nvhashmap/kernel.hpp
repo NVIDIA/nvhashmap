@@ -895,7 +895,7 @@ struct sse_kernel final : public kernel<-128, -127, false> {
     __m128i s;
     s = _mm_min_epu8(l, _mm_srli_si128(l, 1));
     #if NVHM_WITH_SSE >= 4
-    s = _mm_and_si128(s, _mm_set1_epi16(0xffff));
+    s = _mm_and_si128(s, _mm_set1_epi16(0xff));
     s = _mm_minpos_epu16(s);
     #else
     s = _mm_min_epu8(s, _mm_srli_si128(s, 2));
