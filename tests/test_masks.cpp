@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
+#include <nvhashmap/mask.hpp>
 #include "test_common.hpp"
 #include <gtest/gtest.h>
-#include <nvhashmap/kernel.hpp>
-#include <random>
 
 using namespace nvhm;
 

@@ -37,7 +37,7 @@ enum class queue_t : int_t {
   ring
 };
 
-constexpr std::string to_string(queue_t type) {
+constexpr const char* to_string(queue_t type) {
   switch (type) {
     case queue_t::shift: return "shift";
     case queue_t::ring: return "ring";

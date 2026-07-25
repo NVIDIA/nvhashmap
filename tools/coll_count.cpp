@@ -22,8 +22,6 @@
 using namespace nvhm;
 #include "utils.hpp"
 
-
-
 int_t init_capacity{1};
 int_t num_keys{1'000'000};
 key_source_t key_source{key_source_t::polynomial};
@@ -254,16 +252,16 @@ int main(int argc, char* argv[]) {
   nvhm_type_t nvhm_type{nvhm_type_t::map};
   probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
 
-  app.add_option("--init_capacity", init_capacity, "Initial capacity")->default_val(init_capacity)->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--init_capacity", init_capacity, "Initial capacity")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
-  app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
   app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
   app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
   app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
   app.add_option("--test_trigger", test_trigger, "Test trigger")->default_str(to_string(test_trigger))->transform(CLI::CheckedTransformer(str_to_test_trigger, CLI::ignore_case));
-  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->default_val(test_interval);
-  app.add_option("--precision", precision, "Precision of the output")->default_val(precision)->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->capture_default_str();
+  app.add_option("--precision", precision, "Precision of the output")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->default_str(to_string(nvhm_type))->transform(CLI::CheckedTransformer(str_to_nvhm_type, CLI::ignore_case));
   app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
   app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));

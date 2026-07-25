@@ -24,7 +24,10 @@
 
 namespace nvhm {
 
-using guarded_mutex_type = std::shared_mutex;
+using guarded_mutex_t = std::shared_mutex;
+
+template <typename Inner> class guarded_read_pos;
+template <typename Inner> class guarded_write_pos;
 
 template <typename Inner, typename Lock>
 class guarded_pos : public wrapped_pos<Inner> {
@@ -32,7 +35,7 @@ class guarded_pos : public wrapped_pos<Inner> {
   using base_type = wrapped_pos<Inner>;
   using inner_type = typename base_type::inner_type;
 
-  using mutex_type = guarded_mutex_type;
+  using mutex_type = guarded_mutex_t;
   using lock_type = Lock;
 
   template <typename RhsInner, typename RhsLock>
@@ -77,9 +80,9 @@ class guarded_pos : public wrapped_pos<Inner> {
 };
 
 template <typename Inner>
-class guarded_read_pos : public guarded_pos<Inner, std::shared_lock<guarded_mutex_type>> {
+class guarded_read_pos : public guarded_pos<Inner, std::shared_lock<guarded_mutex_t>> {
  public:
-  using base_type = guarded_pos<Inner, std::shared_lock<guarded_mutex_type>>;
+  using base_type = guarded_pos<Inner, std::shared_lock<guarded_mutex_t>>;
   using inner_type = typename base_type::inner_type;
   using lock_type = typename base_type::lock_type;
 
@@ -96,9 +99,9 @@ class guarded_read_pos : public guarded_pos<Inner, std::shared_lock<guarded_mute
 };
 
 template <typename Inner>
-class guarded_write_pos : public guarded_pos<Inner, std::unique_lock<guarded_mutex_type>> {
+class guarded_write_pos : public guarded_pos<Inner, std::unique_lock<guarded_mutex_t>> {
  public:
-  using base_type = guarded_pos<Inner, std::unique_lock<guarded_mutex_type>>;
+  using base_type = guarded_pos<Inner, std::unique_lock<guarded_mutex_t>>;
   using inner_type = typename base_type::inner_type;
   using lock_type = typename base_type::lock_type;
 
@@ -147,7 +150,7 @@ class guarded : public container<guarded<Inner>> {
   using read_pos = guarded_read_pos<inner_read_pos_type>;
   using write_pos = guarded_write_pos<inner_write_pos_type>;
 
-  using mutex_type = guarded_mutex_type;
+  using mutex_type = guarded_mutex_t;
   using read_lock_type = typename read_pos::lock_type;
   using write_lock_type = typename write_pos::lock_type;
   

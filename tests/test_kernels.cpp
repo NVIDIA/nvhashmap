@@ -15,13 +15,9 @@
  * limitations under the License.
  */
 
-#include <nvhashmap/allocator.hpp>
 #include <nvhashmap/kernel.hpp>
-
 #include "test_common.hpp"
 #include <gtest/gtest.h>
-#include <random>
-#include <iomanip>
 
 using namespace nvhm;
 

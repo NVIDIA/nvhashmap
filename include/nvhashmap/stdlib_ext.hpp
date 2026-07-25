@@ -83,7 +83,7 @@ constexpr T* assume_aligned(T* p) noexcept {
   return p;
 }
 
-template <class T, class... Args>
+template <typename T, typename... Args>
 constexpr T* construct_at(T* ptr, Args&&... args) {
   if constexpr (std::is_array_v<T>) {
     return ::new (static_cast<void*>(ptr)) T[1]();

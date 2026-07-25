@@ -36,6 +36,9 @@ namespace nvhm {
 //   return h & shard_mask;
 // }
 
+template <typename Inner> class sharded_read_pos;
+template <typename Inner> class sharded_write_pos;
+
 template <typename Inner>
 class sharded_pos : public wrapped_pos<Inner> {
  public:
@@ -43,10 +46,6 @@ class sharded_pos : public wrapped_pos<Inner> {
   using inner_type = typename base_type::inner_type;
 
   sharded_pos() = delete;
-
-#if defined(NVHM_DEBUG_API_)
-  constexpr shard_idx_t shard_idx() const noexcept { return shard_idx_; }
-#endif
 
   template <typename RhsInner>
   constexpr friend bool operator==(const sharded_pos& lhs, const sharded_pos<RhsInner>& rhs) {

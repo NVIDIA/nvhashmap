@@ -77,7 +77,7 @@ NVHM_NO_INLINE void fill_and_count_probe_seq_lengths() {
   for (psl_t psl{}; psl <= max_psl; psl += set_t::kernel_size) {
     std::cout << " | " << std::setw(num_align) << "";
   }
-  std::cout << " |\n" << std::setfill(' ');
+  std::cout << " |\n" << std::setfill(' ') << std::flush;
 
   // Now print the psls.
   for (int_t i{}; i < num_keys;) {
@@ -253,12 +253,12 @@ int main(int argc, char* argv[]) {
   probe_seq_type_t probe_seq_type{probe_seq_type_t::default_};
 
   app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
-  app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
   app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
   app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
   app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
-  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->default_val(test_interval);
+  app.add_option("--test_interval", test_interval, "Interval in which to test the probe sequence lengths")->capture_default_str();
   app.add_option("--nvhm_type", nvhm_type, "NVHM collection type")->default_str(to_string(nvhm_type))->transform(CLI::CheckedTransformer(str_to_nvhm_type, CLI::ignore_case));
   app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
   app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));

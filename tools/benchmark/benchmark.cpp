@@ -55,10 +55,6 @@ class stopwatch {
      return std::chrono::duration_cast<std::chrono::milliseconds>(elapsed());
    }
  
-   inline friend std::ostream& operator<<(std::ostream& os, const stopwatch& c) {
-     return os << c.elapsed_ms();
-   }
- 
   private:
    std::chrono::high_resolution_clock::time_point begin_;
  };
@@ -470,7 +466,7 @@ queue_t insert_queue_type{queue_t::ring};
 int_t min_insert_queue_len{0};
 int_t max_insert_queue_len{0};
 int_t num_find_trials{5};
-int_t find_keep_perc{100};
+int_t find_hit_perc{100};
 queue_t find_queue_type{queue_t::ring};
 int_t min_find_queue_len{0};
 int_t max_find_queue_len{0};
@@ -486,7 +482,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   if (num_workers < 1 || num_workers > 1024) {
     throw std::runtime_error("`num_workers` is out of bounds!");
   }
-  if (find_keep_perc < 0 || find_keep_perc > 100) {
+  if (find_hit_perc < 0 || find_hit_perc > 100) {
     throw std::runtime_error("`prune_perc` is out of bounds!");
   }
   if (worker::scratch_buf_size < blob_size) {
@@ -583,8 +579,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
         workers[0].assign(fn);
         auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
         if (num_insert_trials > 0) {
-          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-          std::cout.flush();
+          std::cout << (trial ? ", " : "") << std::setw(5) << ms.count() << std::flush;
         }
         total_count += count;
       }
@@ -607,7 +602,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   std::vector<bool> should_exist(keys.size());
   for (int_t i{}; i < to_int(indexes.size()); ++i) {
     int_t idx{indexes[to_uint(i)]};
-    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+    if (i < to_int(indexes.size()) * find_hit_perc / 100) {
       should_exist[to_uint(idx)] = true;
     } else {
       should_exist[to_uint(idx)] = false;
@@ -625,7 +620,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
   // Find
   for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
     if (num_find_trials > 0) {
-      std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit (" << find_queue_type << ' ' << std::setw(2) << queue_len << "): ";
+      std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_hit_perc << "% hit (" << find_queue_type << ' ' << std::setw(2) << queue_len << "): ";
       std::cout.flush();
     }
 
@@ -684,8 +679,7 @@ NVHM_NO_INLINE void bench_nvhm_map() {
           workers[to_uint(w)].assign(fn);
         }
         auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-        std::cout.flush();
+        std::cout << (trial ? ", " : "") << std::setw(5) << ms.count() << std::flush;
         total_count += count;
       }
     }
@@ -782,8 +776,7 @@ NVHM_NO_INLINE void bench_std_map() {
         workers[0].assign(fn);
         auto [ms, count]{accumulate_workers(workers.begin(), workers.begin() + 1)};
         if (num_insert_trials > 0) {
-          std::cout << (trial ? ", " : "") << std::setw(5) << ms;
-          std::cout.flush();
+          std::cout << (trial ? ", " : "") << std::setw(5) << ms.count() << std::flush;
         }
         total_count += count;
       }
@@ -803,7 +796,7 @@ NVHM_NO_INLINE void bench_std_map() {
   std::vector<bool> should_exist(keys.size());
   for (int_t i{}; i < to_int(indexes.size()); ++i) {
     int_t idx{indexes[to_uint(i)]};
-    if (i < to_int(indexes.size()) * find_keep_perc / 100) {
+    if (i < to_int(indexes.size()) * find_hit_perc / 100) {
       should_exist[to_uint(idx)] = true;
     } else {
       should_exist[to_uint(idx)] = false;
@@ -817,7 +810,7 @@ NVHM_NO_INLINE void bench_std_map() {
 
   // Find
   for (int_t queue_len{min_find_queue_len}; queue_len < max_find_queue_len; ++queue_len) {
-    std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_keep_perc << "% hit: ";
+    std::cout << map_type << ", " << std::setw(10) << "Worker " << num_workers << ", Find " << find_hit_perc << "% hit: ";
     std::cout.flush();
 
     int_t total_count{};
@@ -836,7 +829,7 @@ NVHM_NO_INLINE void bench_std_map() {
           workers[to_uint(w)].assign(fn);
         }
         auto [ms, count]{accumulate_workers(workers.begin(), workers.end())};
-        std::cout << (trial ? ", " : "") << std::setw(5) << ms;
+        std::cout << (trial ? ", " : "") << std::setw(5) << ms.count();
         std::cout.flush();
         total_count += count;
       }
@@ -1132,30 +1125,30 @@ int main(int argc, char* argv[]) {
 
   app.add_option("--stat", stat, "The statistic to use for reporting")->default_str(to_string(stat))->transform(CLI::CheckedTransformer(str_to_statistic, CLI::ignore_case));
   app.add_option("--key_type", key_type, "Key type")->default_str(to_string(key_type))->transform(CLI::CheckedTransformer(str_to_key_type, CLI::ignore_case));
-  app.add_option("--num_keys", num_keys, "Number of keys")->default_val(num_keys)->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_keys", num_keys, "Number of keys")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
   app.add_option("--key_source", key_source, "Key source")->default_str(to_string(key_source))->transform(CLI::CheckedTransformer(str_to_key_source, CLI::ignore_case));
   app.add_option("--key_c0", key_c[0], "Key coefficient 0 (key space density control)")->default_val(key_c[0]);
   app.add_option("--key_c1", key_c[1], "Key coefficient 1 (key space density control)")->default_val(key_c[1]);
   app.add_option("--key_c2", key_c[2], "Key coefficient 2 (key space density control)")->default_val(key_c[2]);
-  app.add_option("--aggressive_prefetch", aggressive_prefetch, "Aggressive prefetch")->default_val(aggressive_prefetch);
-  app.add_option("--value_type", value_type, "Value type (time | void)")->default_val(value_type);
-  app.add_option("--blob_size", blob_size, "Blob size")->default_val(blob_size)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--num_workers", num_workers, "Number of workers")->default_val(num_workers)->check(CLI::Validator(CLI::PositiveNumber));
-  app.add_option("--num_insert_trials", num_insert_trials, "Number of trials for insert")->default_val(num_insert_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--aggressive_prefetch", aggressive_prefetch, "Aggressive prefetch")->capture_default_str();
+  app.add_option("--value_type", value_type, "Value type (time | void)")->capture_default_str();
+  app.add_option("--blob_size", blob_size, "Blob size")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--num_workers", num_workers, "Number of workers")->capture_default_str()->check(CLI::Validator(CLI::PositiveNumber));
+  app.add_option("--num_insert_trials", num_insert_trials, "Number of trials for insert")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--insert_queue_type", insert_queue_type, "Insert queue type")->default_str(to_string(insert_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
-  app.add_option("--min_insert_queue_len", min_insert_queue_len, "Min insert queue length")->default_val(min_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--max_insert_queue_len", max_insert_queue_len, "Max insert queue length")->default_val(max_insert_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--num_find_trials", num_find_trials, "Number of trials for find")->default_val(num_find_trials)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--find_keep_perc", find_keep_perc, "Find keep percentage")->default_val(find_keep_perc)->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--min_insert_queue_len", min_insert_queue_len, "Min insert queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--max_insert_queue_len", max_insert_queue_len, "Max insert queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--num_find_trials", num_find_trials, "Number of trials for find")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--find_hit_perc", find_hit_perc, "Find hit %")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
   app.add_option("--find_queue_type", find_queue_type, "Find queue type")->default_str(to_string(find_queue_type))->transform(CLI::CheckedTransformer(str_to_queue, CLI::ignore_case));
-  app.add_option("--min_find_queue_len", min_find_queue_len, "Min find queue length")->default_val(min_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->default_val(max_find_queue_len)->check(CLI::Validator(CLI::NonNegativeNumber));
-  app.add_option("--check_blobs", check_blobs, "Check blobs")->default_val(check_blobs);
+  app.add_option("--min_find_queue_len", min_find_queue_len, "Min find queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--max_find_queue_len", max_find_queue_len, "Max find queue length")->capture_default_str()->check(CLI::Validator(CLI::NonNegativeNumber));
+  app.add_option("--check_blobs", check_blobs, "Check blobs")->capture_default_str();
   app.add_option("--seed", seed, "Randomizer seed")->default_str("random");
   app.add_option("--map_type", map_type, "Map type")->default_str(to_string(map_type))->transform(CLI::CheckedTransformer(str_to_map_type, CLI::ignore_case));
   app.add_option("--kernel_type", kernel_type, "Kernel type")->default_str(to_string(kernel_type))->transform(CLI::CheckedTransformer(str_to_kernel_type, CLI::ignore_case));
   app.add_option("--probe_seq_type", probe_seq_type, "Probe sequence type")->default_str(to_string(probe_seq_type))->transform(CLI::CheckedTransformer(str_to_probe_seq_type));
-  app.add_option("--serialize_copy", serialize_copy, "Serialize copy")->default_val(serialize_copy);
+  app.add_option("--serialize_copy", serialize_copy, "Serialize copy")->capture_default_str();
 
   argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
@@ -1177,7 +1170,7 @@ int main(int argc, char* argv[]) {
   std::cerr << "  --min_insert_queue_len " << min_insert_queue_len << " \\\n";
   std::cerr << "  --max_insert_queue_len " << max_insert_queue_len << " \\\n";
   std::cerr << "  --num_find_trials " << num_find_trials << " \\\n";
-  std::cerr << "  --find_keep_perc " << find_keep_perc << " \\\n";
+  std::cerr << "  --find_hit_perc " << find_hit_perc << " \\\n";
   std::cerr << "  --find_queue_type " << find_queue_type << " \\\n";
   std::cerr << "  --min_find_queue_len " << min_find_queue_len << " \\\n";
   std::cerr << "  --max_find_queue_len " << max_find_queue_len << " \\\n";
