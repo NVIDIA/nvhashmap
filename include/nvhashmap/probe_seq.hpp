@@ -60,7 +60,6 @@ class probe_seq : public self_aware<Self> {
 
   constexpr self_type& operator+=(int_t n) noexcept {
     NVHM_ASSERT_(n >= 0, "n = ", n);
-    //NVHM_ASSERT_(psl_ >= 0 && psl_ < max_length, "Probe sequence is out of bounds! (psl = ", psl_, ", max_length = ", max_length, ')');
     psl_ += n;
     NVHM_ASSERT_(psl_ >= 0);
     return *self();

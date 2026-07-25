@@ -25,6 +25,9 @@
 
 namespace nvhm {
 
+class raw_map_read_pos;
+class raw_map_write_pos;
+
 class raw_map_pos : public wrapped_pos<raw_pos_t> {
  public:
   using base_type = wrapped_pos<raw_pos_t>;

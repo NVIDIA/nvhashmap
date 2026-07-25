@@ -16,9 +16,7 @@
  */
 
 #include <nvhashmap/memory.hpp>
-
 #include "test_common.hpp"
-#include <random>
 #include <gtest/gtest.h>
 
 using namespace nvhm;
