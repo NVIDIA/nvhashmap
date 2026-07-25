@@ -31,10 +31,6 @@
 #include <bit>
 #endif
 
-#if defined(__BMI__) || defined(__POPCNT__) || defined(__LZCNT__)
-#include <x86intrin.h>
-#endif
-
 namespace nvhm {
 
 template <typename T>
@@ -115,20 +111,7 @@ template <typename T>
 constexpr int popcount(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
-  #if defined(__POPCNT__)
-  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    return _mm_popcnt_u32(x);
-  }
-  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return static_cast<int>(_mm_popcnt_u64(x));
-  }
-  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
-    uint64_t lo{low_bits(x)};
-    uint64_t hi{high_bits(x)};
-    return popcount(lo) + popcount(hi);
-  }
-
-  #elif defined(__GNUC__) || defined(__clang__)
+  #if defined(__GNUC__) || defined(__clang__)
   #if __has_builtin(__builtin_popcountg)
   return __builtin_popcountg(x);
   #endif
@@ -149,7 +132,6 @@ constexpr int popcount(T x) noexcept {
     return popcount(lo) + popcount(hi);
   }
   #endif
-
   #endif
 
   return popcount_fallback(x);
@@ -172,22 +154,7 @@ constexpr int countl_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-  #if defined(__LZCNT__)
-  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    constexpr int n32{sizeof(uint32_t) * 8};
-    return static_cast<int>(_lzcnt_u32(x)) - (n32 - n);
-  }
-  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return static_cast<int>(_lzcnt_u64(x));
-  }
-  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
-    uint64_t lo{low_bits(x)};
-    uint64_t hi{high_bits(x)};
-    return hi ? countl_zero(hi) : 64 + countl_zero(lo);
-  }
-
-  #elif defined(__GNUC__) || defined(__clang__)
-
+  #if defined(__GNUC__) || defined(__clang__)
   #if __has_builtin(__builtin_clzg)
   return __builtin_clzg(x, n);
   #endif
@@ -228,23 +195,7 @@ constexpr int countr_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-  #if defined(__BMI__)
-  if constexpr (sizeof(T) <= sizeof(uint16_t)) {
-    return static_cast<int>(_tzcnt_u32(x | (UINT32_C(1) << n)));
-  }
-  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    return static_cast<int>(_tzcnt_u32(x));
-  }
-  if constexpr (sizeof(T) <= sizeof(uint64_t)) {
-    return static_cast<int>(_tzcnt_u64(x));
-  }
-  if constexpr (sizeof(T) <= sizeof(__uint128_t)) {
-    uint64_t lo{low_bits(x)};
-    uint64_t hi{high_bits(x)};
-    return lo ? countr_zero(lo) : 64 + countr_zero(hi);
-  }
-
-  #elif defined(__GNUC__) || defined(__clang__)
+  #if defined(__GNUC__) || defined(__clang__)
   #if __has_builtin(__builtin_ctzg)
   return __builtin_ctzg(x, n);
   #endif
