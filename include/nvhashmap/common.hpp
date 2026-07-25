@@ -386,7 +386,7 @@ constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
     return "error";                                                                    \
   }                                                                                    \
                                                                                        \
-  constexpr std::string to_string(_type_name_ v) noexcept {                            \
+  inline std::string to_string(_type_name_ v) noexcept {                               \
     return std::string{to_string_view(v)};                                             \
   }                                                                                    \
                                                                                        \

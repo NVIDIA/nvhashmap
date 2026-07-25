@@ -62,10 +62,6 @@ class stopwatch {
    return std::chrono::duration_cast<std::chrono::seconds>(elapsed());
   }
 
-  inline friend std::ostream& operator<<(std::ostream& os, const stopwatch& c) {
-    return os << c.elapsed_ms();
-  }
-
  private:
   time_point_type begin_;
 };
