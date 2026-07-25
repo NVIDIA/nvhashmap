@@ -2,7 +2,7 @@
 
 BENCH_CMD="numactl -N 0 -m 0 ./tools/benchmark/map_benchmark"
 
-NUM_KEYS=5000000
+NUM_KEYS=50000000
 KEY_SOURCE=polynomial
 KEY_POLY=13,3,7
 SEED=1337
