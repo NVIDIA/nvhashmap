@@ -35,9 +35,9 @@
 #include <x86intrin.h>
 #endif
 
-namespace nvhm { 
+namespace nvhm {
 
-template<typename T>
+template <typename T>
 constexpr bool is_unsigned_v{std::is_unsigned_v<T> || std::is_same_v<T, __uint128_t>};
 
 #if defined(__cpp_lib_remove_cvref)
@@ -51,7 +51,6 @@ struct remove_cvref {
 template <typename T>
 using remove_cvref_t = typename remove_cvref<T>::type;
 #endif
-
 
 template <typename T, typename U>
 constexpr T broadcast(const U x) noexcept {
@@ -74,11 +73,11 @@ template <size_t N, typename T>
 constexpr T* assume_aligned(T* p) noexcept {
   static_assert(N >= alignof(T) && N % alignof(T) == 0);
 
-#if defined(__GNUC__) || defined(__clang__)
-#if __has_builtin(__builtin_assume_aligned)
+  #if defined(__GNUC__) || defined(__clang__)
+  #if __has_builtin(__builtin_assume_aligned)
   return static_cast<T*>(__builtin_assume_aligned(p, N));
-#endif
-#endif
+  #endif
+  #endif
 
   return p;
 }
@@ -92,7 +91,7 @@ constexpr T* construct_at(T* ptr, Args&&... args) {
   }
 }
 
-template<typename T>
+template <typename T>
 constexpr int popcount_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   static_assert(sizeof(T) <= 16, "Top byte summing trick only works for types up to 16 bytes!");
@@ -101,9 +100,9 @@ constexpr int popcount_fallback(T x) noexcept {
   constexpr T b0011{broadcast<T, uint8_t>(0x33)};
   constexpr T b00001111{broadcast<T, uint8_t>(0x0f)};
 
-  x -= (x >> 1) & b01;  // 2-bit sums
+  x -= (x >> 1) & b01;                   // 2-bit sums
   x = (x & b0011) + ((x >> 2) & b0011);  // 4-bit sums
-  x = (x + (x >> 4)) & b00001111;  // 8-bit sums
+  x = (x + (x >> 4)) & b00001111;        // 8-bit sums
 
   // Sum up in top byte.
   constexpr int n{sizeof(T) * 8};
@@ -116,7 +115,7 @@ template <typename T>
 constexpr int popcount(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
-#if defined(__POPCNT__)
+  #if defined(__POPCNT__)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
     return _mm_popcnt_u32(x);
   }
@@ -129,18 +128,18 @@ constexpr int popcount(T x) noexcept {
     return popcount(lo) + popcount(hi);
   }
 
-#elif defined(__GNUC__) || defined(__clang__)
-#if __has_builtin(__builtin_popcountg)
+  #elif defined(__GNUC__) || defined(__clang__)
+  #if __has_builtin(__builtin_popcountg)
   return __builtin_popcountg(x);
-#endif
+  #endif
 
-#if __has_builtin(__builtin_popcount)
+  #if __has_builtin(__builtin_popcount)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
     return __builtin_popcount(x);
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_popcountll)
+  #if __has_builtin(__builtin_popcountll)
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
     return __builtin_popcountll(x);
   }
@@ -149,9 +148,9 @@ constexpr int popcount(T x) noexcept {
     uint64_t hi{high_bits(x)};
     return popcount(lo) + popcount(hi);
   }
-#endif
+  #endif
 
-#endif
+  #endif
 
   return popcount_fallback(x);
 }
@@ -173,7 +172,7 @@ constexpr int countl_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-#if defined(__LZCNT__)
+  #if defined(__LZCNT__)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
     constexpr int n32{sizeof(uint32_t) * 8};
     return static_cast<int>(_lzcnt_u32(x)) - (n32 - n);
@@ -187,20 +186,20 @@ constexpr int countl_zero(T x) noexcept {
     return hi ? countl_zero(hi) : 64 + countl_zero(lo);
   }
 
-#elif defined(__GNUC__) || defined(__clang__)
+  #elif defined(__GNUC__) || defined(__clang__)
 
-#if __has_builtin(__builtin_clzg)
+  #if __has_builtin(__builtin_clzg)
   return __builtin_clzg(x, n);
-#endif
+  #endif
 
-#if __has_builtin(__builtin_clz)
+  #if __has_builtin(__builtin_clz)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
     constexpr int n32{sizeof(uint32_t) * 8};
     return x ? __builtin_clz(x) - (n32 - n) : n;
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_clzll)  
+  #if __has_builtin(__builtin_clzll)
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
     return x ? __builtin_clzll(x) : n;
   }
@@ -209,8 +208,8 @@ constexpr int countl_zero(T x) noexcept {
     uint64_t hi{high_bits(x)};
     return hi ? countl_zero(hi) : 64 + countl_zero(lo);
   }
-#endif
-#endif
+  #endif
+  #endif
 
   return countl_zero_fallback(x);
 }
@@ -229,7 +228,7 @@ constexpr int countr_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-#if defined(__BMI__)
+  #if defined(__BMI__)
   if constexpr (sizeof(T) <= sizeof(uint16_t)) {
     return static_cast<int>(_tzcnt_u32(x | (UINT32_C(1) << n)));
   }
@@ -245,18 +244,18 @@ constexpr int countr_zero(T x) noexcept {
     return lo ? countr_zero(lo) : 64 + countr_zero(hi);
   }
 
-#elif defined(__GNUC__) || defined(__clang__)
-#if __has_builtin(__builtin_ctzg)
+  #elif defined(__GNUC__) || defined(__clang__)
+  #if __has_builtin(__builtin_ctzg)
   return __builtin_ctzg(x, n);
-#endif
+  #endif
 
-#if __has_builtin(__builtin_ctz)
+  #if __has_builtin(__builtin_ctz)
   if constexpr (sizeof(T) <= sizeof(uint16_t)) {
     return __builtin_ctz(x | (UINT32_C(1) << n));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_ctzll)
+  #if __has_builtin(__builtin_ctzll)
   if constexpr (sizeof(T) <= sizeof(uint32_t)) {
     return __builtin_ctzll(x | (UINT64_C(1) << n));
   }
@@ -268,8 +267,8 @@ constexpr int countr_zero(T x) noexcept {
     uint64_t hi{high_bits(x)};
     return lo ? countr_zero(lo) : 64 + countr_zero(hi);
   }
-#endif
-#endif
+  #endif
+  #endif
 
   return countr_zero_fallback(x);
 }
@@ -292,31 +291,31 @@ template <typename T>
 constexpr T rotl(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
-#if defined(__GNUC__) || defined(__clang__)
-#if __has_builtin(__builtin_rotateleft8)
+  #if defined(__GNUC__) || defined(__clang__)
+  #if __has_builtin(__builtin_rotateleft8)
   if constexpr (sizeof(T) == sizeof(uint8_t)) {
     return __builtin_rotateleft8(x, static_cast<uint8_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateleft16)
+  #if __has_builtin(__builtin_rotateleft16)
   if constexpr (sizeof(T) == sizeof(uint16_t)) {
     return __builtin_rotateleft16(x, static_cast<uint16_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateleft32)
+  #if __has_builtin(__builtin_rotateleft32)
   if constexpr (sizeof(T) == sizeof(uint32_t)) {
     return __builtin_rotateleft32(x, static_cast<uint32_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateleft64)
+  #if __has_builtin(__builtin_rotateleft64)
   if constexpr (sizeof(T) == sizeof(uint64_t)) {
     return __builtin_rotateleft64(x, static_cast<uint64_t>(s));
   }
-#endif
-#endif
+  #endif
+  #endif
 
   return rotl_fallback(x, s);
 }
@@ -339,31 +338,31 @@ template <typename T>
 constexpr T rotr(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
-#if defined(__GNUC__) || defined(__clang__)
-#if __has_builtin(__builtin_rotateright8)
+  #if defined(__GNUC__) || defined(__clang__)
+  #if __has_builtin(__builtin_rotateright8)
   if constexpr (sizeof(T) == sizeof(uint8_t)) {
     return __builtin_rotateright8(x, static_cast<uint8_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateright16)
+  #if __has_builtin(__builtin_rotateright16)
   if constexpr (sizeof(T) == sizeof(uint16_t)) {
     return __builtin_rotateright16(x, static_cast<uint16_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateright32)
+  #if __has_builtin(__builtin_rotateright32)
   if constexpr (sizeof(T) == sizeof(uint32_t)) {
     return __builtin_rotateright32(x, static_cast<uint32_t>(s));
   }
-#endif
+  #endif
 
-#if __has_builtin(__builtin_rotateright64)
+  #if __has_builtin(__builtin_rotateright64)
   if constexpr (sizeof(T) == sizeof(uint64_t)) {
     return __builtin_rotateright64(x, static_cast<uint64_t>(s));
   }
-#endif
-#endif
+  #endif
+  #endif
 
   return rotr_fallback(x, s);
 }
@@ -389,12 +388,12 @@ constexpr T bit_ceil_fallback(T x) noexcept {
 template <typename T>
 constexpr T bit_ceil(T x) noexcept {
   static_assert(is_unsigned_v<T>);
-#if defined(__clang__) && defined(__x86_64__)
+  #if defined(__clang__) && defined(__x86_64__)
   // TODO: Figure out why this breaks test_basics.cpp for __uint128_t on clang, but only with x86_64.
   if constexpr (sizeof(T) >= sizeof(__uint128_t)) {
     return bit_ceil_fallback(x);
   }
-#endif
+  #endif
   // Annoying, but makes it compatible with std::bit_ceil.
   if (x == 0) return 1;
 

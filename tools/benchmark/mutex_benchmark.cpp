@@ -38,7 +38,7 @@ NVHM_MAKE_ENUM_WITH_VALIDATOR_(scenario_t,
   high_contention, // N threads, exclusive lock/unlock back-to-back.
   low_contention,  // N threads, short critical section, ~90% of the time spent outside the lock.
   read_mostly      // N threads, `read_perc`% shared reads, rest exclusive writes.
-)
+);
 
 scenario_t scenario{scenario_t::high_contention};
 int_t read_perc{95};
@@ -183,7 +183,7 @@ NVHM_MAKE_ENUM_WITH_VALIDATOR_(mutex_type_t,
   nvhm_spin_wait_mutex,
   std_mutex,
   std_shared_mutex
-)
+);
 
 void run(mutex_type_t mutex_type, int_t spin_count, bool use_wait) {
   switch (mutex_type) {

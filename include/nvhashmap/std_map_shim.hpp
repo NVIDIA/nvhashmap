@@ -31,7 +31,7 @@ class std_map_shim {
   using const_mapped_type = typename inner_type::const_mapped_type;
   using mapped_type = typename inner_type::mapped_type;
   using value_type = std::pair<const key_type, remove_cvref_t<mapped_type>>;
-  
+
   using size_type = std::size_t;
   using difference_type = std::ptrdiff_t;
 
@@ -50,7 +50,7 @@ class std_map_shim {
     using self_type = typename base_type::self_type;
     using inner_type = typename base_type::inner_type;
     using difference_type = typename base_type::difference_type;
-    
+
     using outer_type = Outer;
     constexpr static bool is_readonly{std::is_const_v<outer_type>};
     using mapped_type = typename inner_type::mapped_type;
@@ -155,7 +155,7 @@ class std_map_shim {
 
     friend class std_map_shim;
   };
-  
+
   constexpr std_map_shim() {}
   template <typename Arg0, typename... Args, typename = std::enable_if_t<!std::is_same_v<remove_cvref_t<Arg0>, std_map_shim>>>
   constexpr std_map_shim(Arg0&& arg0, Args&&... args)
@@ -187,19 +187,19 @@ class std_map_shim {
   constexpr void clear() { inner_.clear(); }
 
   constexpr bool contains(const key_type& key) const { return inner_.contains(key); }
-  
+
   constexpr size_type count(const key_type& key) const { return to_uint(inner_.count(key)); }
 
   template <typename K, typename V>
   constexpr std::pair<iterator, bool> emplace(K&& key, V&& value) {
     return insert(std::forward<K>(key), std::forward<V>(value));
   }
-  
+
   constexpr bool empty() const { return inner_.is_empty(); }
 
   constexpr const_iterator end() const { return inner_.end(); }
   constexpr iterator end() { return inner_.end(); }
-  
+
   std::pair<const_iterator, const_iterator> equal_range(const key_type& key) const {
     auto pos{inner_.find(key)};
     bool is_npos{pos == npos};
@@ -235,7 +235,7 @@ class std_map_shim {
       throw std::out_of_range("The iterator did not point to a valid entry!");
     }
   }
-  template<typename LastIt>
+  template <typename LastIt>
   constexpr iterator erase(iterator&& first, const LastIt& last) {
     if constexpr (test_flags(inner_type::flags, flags_t::auto_shrink)) {
       throw std::runtime_error("Erasing a range is not supported when `auto_shrink` is enabled!");
@@ -279,7 +279,7 @@ class std_map_shim {
 
     return {inner_.to_iterator(std::move(pos)), op != insert_op_t::found};
   }
-  
+
   constexpr float load_factor() const { return static_cast<float>(inner_.load_factor()); }
 
   constexpr float max_load_factor() const { return static_cast<float>(inner_.max_load_factor()); }
@@ -295,7 +295,7 @@ class std_map_shim {
 
   constexpr size_type size() const { return to_uint(inner_.size()); }
 
-  template<typename K, typename... Args>
+  template <typename K, typename... Args>
   constexpr std::pair<iterator, bool> try_emplace(K&& key, Args&&... args) {
     auto [pos, _, op]{inner_.insert_ex(std::forward<K>(key))};
     if (op == insert_op_t::reject) {
@@ -320,7 +320,7 @@ class std_map_shim {
   }
   constexpr friend bool operator!=(const std_map_shim& lhs, const std_map_shim& rhs) { return !(lhs == rhs); }
 
-  constexpr friend void swap(std_map_shim& lhs, std_map_shim& rhs) { 
+  constexpr friend void swap(std_map_shim& lhs, std_map_shim& rhs) {
     if (&lhs == &rhs) return;
 
     std::swap(lhs.inner_, rhs.inner_);

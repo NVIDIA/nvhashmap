@@ -55,7 +55,6 @@ constexpr raw_pos_t hash_to_pos(hash_t h) noexcept {
   if constexpr (hash_layout == hash_layout_t::traditional) {
     if constexpr (num_kernel_bits >= num_state_bits) {
       h <<= num_kernel_bits - num_state_bits;
-      
     } else {
       h >>= num_state_bits - num_kernel_bits;
     }

@@ -30,11 +30,12 @@
 
 #define NVHM_MAKE_ENUM_TO_ENUM_CLASS_(_type_name_, _value_) , _type_name_::_value_
 
-#define NVHM_MAKE_ENUM_WITH_VALIDATOR_(_type_name_, ...)\
-  NVHM_MAKE_ENUM_(_type_name_, __VA_ARGS__)\
-  inline const auto _type_name_##_validator{\
-    make_enum_validator<0 NVHM_MAKE_ENUM_FOR_EACH_(NVHM_MAKE_ENUM_TO_ENUM_CLASS_, _type_name_, __VA_ARGS__)>()\
-  };
+#define NVHM_MAKE_ENUM_WITH_VALIDATOR_(_type_name_, ...)                                                       \
+  NVHM_MAKE_ENUM_(_type_name_, __VA_ARGS__);                                                                   \
+                                                                                                               \
+  inline const auto _type_name_##_validator{                                                                   \
+    make_enum_validator<0 NVHM_MAKE_ENUM_FOR_EACH_(NVHM_MAKE_ENUM_TO_ENUM_CLASS_, _type_name_, __VA_ARGS__)>() \
+  }
 
 class stopwatch {
  public:
@@ -97,7 +98,7 @@ CLI::Validator make_enum_validator() {
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(key_source_t,
   polynomial,
   random
-)
+);
 
 template <typename Key>
 inline std::vector<Key> make_keys(int_t num_keys, key_source_t key_source, const std::array<int_t, 3>& key_poly, std::mt19937_64& __restrict rng) {
@@ -138,7 +139,7 @@ inline int rendered_length(int_t value, int base = 10) {
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(key_type_t,
   int32,
   int64
-)
+);
 
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(kernel_type_t,
   default_
@@ -195,7 +196,7 @@ NVHM_MAKE_ENUM_WITH_VALIDATOR_(kernel_type_t,
   #if NVHM_TOOLS_COMPILE_KERNELS >= 40
   , array1, array2, array4, array8, array16, array32, array64, array128, array256, array512
   #endif
-)
+);
 
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(probe_seq_type_t,
   default_
@@ -205,17 +206,17 @@ NVHM_MAKE_ENUM_WITH_VALIDATOR_(probe_seq_type_t,
   #if NVHM_TOOLS_COMPILE_PROBE_SEQS >= 20
   , aligned_linear, aligned_quadratic
   #endif
-)
+);
 
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(nvhm_type_t,
   map,
   cache
-)
+);
 
 NVHM_MAKE_ENUM_WITH_VALIDATOR_(test_trigger_t,
   interval,
   load_perc
-)
+);
 
 template <typename T>
 std::string type_to_string() {

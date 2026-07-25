@@ -21,7 +21,7 @@
 
 namespace nvhm {
 
-template<int_t Size>
+template <int_t Size>
 constexpr std::pair<raw_pos_t, int_t> splice_pos(raw_pos_t pos) noexcept {
   constexpr bitmask_t mask{size_mask_v<Size>};
   return {
@@ -68,7 +68,10 @@ class probe_seq : public self_aware<Self> {
   constexpr friend bool operator==(const probe_seq& lhs, const probe_seq& rhs) noexcept { return lhs.psl_ == rhs.psl_; }
   constexpr friend bool operator!=(const probe_seq& lhs, const probe_seq& rhs) noexcept { return !(lhs == rhs); }
 
-  constexpr friend self_type operator+(self_type seq, int_t n) noexcept { seq += n; return seq; }
+  constexpr friend self_type operator+(self_type seq, int_t n) noexcept {
+    seq += n;
+    return seq;
+  }
 
   constexpr friend void swap(probe_seq& lhs, probe_seq& rhs) noexcept {
     std::swap(lhs.psl_, rhs.psl_);
@@ -185,7 +188,7 @@ class quadratic_seq : public aligned_probe_seq<quadratic_seq<Alignment, MaxLengt
   using self_type = typename base_type::self_type;
 
   using base_type::alignment_mask;
-  
+
   quadratic_seq() = delete;
   constexpr quadratic_seq(raw_pos_t pos) : base_type(pos) {}
 

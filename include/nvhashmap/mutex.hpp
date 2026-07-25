@@ -116,7 +116,7 @@ template <typename Mutex>
  * this with multiple threads in parallel, which would cause a deadlock. So, the fallback
  * is to unlock the shared lock and re-acquire the lock as a unique lock. In that case,
  * changes to the lock-guarded data structure may occur while the lock is not held.
- * 
+ *
  * @param lock The `shared_lock`.
  * @returns The `unique_lock`.
  */
@@ -211,9 +211,9 @@ constexpr int_t mutex_default_min_back_off{8};
  * (~10 us on Grace) if `UseWait = true`.
  */
 template <
-  typename StateType = int32_t,
-  int_t SpinIterations = mutex_default_spin_iterations, bool UseWait = mutex_default_use_wait,
-  int_t MinBackOff = mutex_default_min_back_off, int_t MaxBackOff = mutex_default_max_back_off>
+  typename StateType = int32_t, int_t SpinIterations = mutex_default_spin_iterations,
+  bool UseWait = mutex_default_use_wait, int_t MinBackOff = mutex_default_min_back_off,
+  int_t MaxBackOff = mutex_default_max_back_off>
 class spin_wait_mutex {
  public:
   using state_type = StateType;
@@ -260,7 +260,7 @@ class spin_wait_mutex {
         detail::backoff<min_backoff, max_backoff>();
         continue;
       }
-      
+
       // Fallback to wait queue.
       if constexpr (use_wait) {
         #if defined(__cpp_lib_atomic_wait)
@@ -285,7 +285,7 @@ class spin_wait_mutex {
     state_type s{};
     return state_.compare_exchange_strong(s, -1, std::memory_order_acquire, std::memory_order_relaxed);
   }
-  
+
   NVHM_ALWAYS_INLINE void unlock() noexcept {
     NVHM_ASSERT_(state_.load(std::memory_order_relaxed) < 0, "Mutex was not write-locked!");
     state_.store(0, std::memory_order_release);

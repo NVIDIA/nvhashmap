@@ -848,7 +848,7 @@ NVHM_MAKE_ENUM_WITH_VALIDATOR_(map_type_t,
   phmap_flat_hash_map,
   #endif
   nvhm_map
-)
+);
 
 template <typename Key, typename Value, flags_t Flags, typename Kernel>
 void run_bench_nvhm_map_5(probe_seq_type_t probe_seq_type) {

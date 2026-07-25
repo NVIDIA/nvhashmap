@@ -19,11 +19,8 @@
 
 #include "common.hpp"
 
+namespace nvhm { namespace detail {
 
-namespace nvhm {
-
-namespace detail {
-  
 #if defined(__aarch64__)
 template <bool store>
 inline void arm64_rprfm(const std::byte* __restrict p, int_t n) noexcept {
@@ -45,9 +42,7 @@ inline void arm64_rprfm(const std::byte* __restrict p, int_t n) noexcept {
 }
 #endif
 
-}  // namespace detail
-
-}  // namespace nvhm
+}}  // namespace nvhm::detail
 
 #include <cstring>
 
@@ -68,7 +63,6 @@ using mm_hint_t = _mm_hint;
 #endif
 
 }  // namespace detail
-
 
 template <typename T>
 inline void read_prefetch(const T* p, int_t n) noexcept {

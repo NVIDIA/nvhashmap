@@ -115,7 +115,7 @@ class alignas(cache_line_size) shift_prefetch_queue
     return *self();
   }
 
-  template<typename K, typename V>
+  template <typename K, typename V>
   constexpr self_type& prefill(int_t idx, K&& key, V&& value) noexcept {
     NVHM_ASSERT_(idx >= 0 && idx < capacity);
     keys_[idx] = std::forward<K>(key);
@@ -128,7 +128,7 @@ class alignas(cache_line_size) shift_prefetch_queue
     return prefill(idx, std::forward<K>(key), map.read_prefetch(key));
   }
 
-  template<typename Map, typename K>
+  template <typename Map, typename K>
   constexpr self_type& prefill_write(int_t idx, Map& map, K&& key) noexcept {
     return prefill(idx, std::forward<K>(key), map.write_prefetch(key));
   }
@@ -186,7 +186,7 @@ class alignas(cache_line_size) ring_prefetch_queue
   template <typename K, typename V>
   [[nodiscard]] constexpr entry_type push(K&& key, V&& value) noexcept {
     NVHM_ASSERT_(full(), "Queue must be full to push.");
-    
+
     int_t idx{align_pos<capacity_mask>(begin_++)};
     key_type key0{std::move(keys_[idx])};
     value_type value0{std::move(values_[idx])};
@@ -209,8 +209,8 @@ class alignas(cache_line_size) ring_prefetch_queue
     ++begin_;
     return *self();
   }
-  
-  template<typename K, typename V>
+
+  template <typename K, typename V>
   constexpr self_type& prefill(K&& key, V&& value) noexcept {
     const int_t idx{align_pos<capacity_mask>(end_++)};
     keys_[idx] = std::forward<K>(key);
@@ -223,7 +223,7 @@ class alignas(cache_line_size) ring_prefetch_queue
     return prefill(std::forward<K>(key), map.read_prefetch(key));
   }
 
-  template<typename Map, typename K>
+  template <typename Map, typename K>
   constexpr self_type& prefill_write(Map& map, K&& key) noexcept {
     return prefill(std::forward<K>(key), map.write_prefetch(key));
   }
@@ -235,4 +235,4 @@ class alignas(cache_line_size) ring_prefetch_queue
   int_t end_{};
 };
 
-}
+}  // namespace nvhm

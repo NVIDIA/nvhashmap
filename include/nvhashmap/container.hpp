@@ -24,49 +24,49 @@ namespace nvhm {
 #if defined(NVHM_CONTAINER_INTERFACE_)
 #error NVHM_CONTAINER_INTERFACE_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_CONTAINER_INTERFACE_()\
-  /**
-   * Collects the population bucket population distribution.
-   *
-   * @return An array of size `kernel_type::size + 1` containing the population distribution.
-   */\
-  constexpr std::array<int_t, kernel_size + 1> kernel_populations() const {\
-    std::array<int_t, kernel_size + 1> counts{};\
-    self()->count_kernel_populations(counts);\
-    return counts;\
-  }\
-  \
-  /**
-   * Count the number of collisions for each bucket.
-   *
-   * @return An array of size `kernel_size` containing the number of collision distribution.
-   */\
-  constexpr std::array<int_t, kernel_size> state_collisions() const {\
-    std::array<int_t, kernel_size> counts{};\
-    self()->count_state_collisions(counts);\
-    return counts;\
-  }\
-  \
-  /**
-   * Retrieve all keys in the data structure.
-   *
-   * @return The keys.
-   */\
-  constexpr std::vector<key_type> keys() const {\
-    std::vector<key_type> res;\
-    self()->for_each_key([&](const key_type& key) { res.emplace_back(key); });\
-    return res;\
-  }\
-  \
-  /**
-   * Retrieve all value views in the data structure.
-   *
-   * @return The value views.
-   */\
-   constexpr std::vector<value_type> values() const {\
-    std::vector<value_type> res;\
-    self()->for_each_value([&](const value_type& value) { res.emplace_back(value); });\
-    return res;\
+#define NVHM_CONTAINER_INTERFACE_()                                                           \
+  /**                                                                                         \
+   * Collects the population bucket population distribution.                                  \
+   *                                                                                          \
+   * @return An array of size `kernel_type::size + 1` containing the population distribution. \
+   */                                                                                         \
+  constexpr std::array<int_t, kernel_size + 1> kernel_populations() const {                   \
+    std::array<int_t, kernel_size + 1> counts{};                                              \
+    self()->count_kernel_populations(counts);                                                 \
+    return counts;                                                                            \
+  }                                                                                           \
+                                                                                              \
+  /**                                                                                         \
+   * Count the number of collisions for each bucket.                                          \
+   *                                                                                          \
+   * @return An array of size `kernel_size` containing the number of collision distribution.  \
+   */                                                                                         \
+  constexpr std::array<int_t, kernel_size> state_collisions() const {                         \
+    std::array<int_t, kernel_size> counts{};                                                  \
+    self()->count_state_collisions(counts);                                                   \
+    return counts;                                                                            \
+  }                                                                                           \
+                                                                                              \
+  /**                                                                                         \
+   * Retrieve all keys in the data structure.                                                 \
+   *                                                                                          \
+   * @return The keys.                                                                        \
+   */                                                                                         \
+  constexpr std::vector<key_type> keys() const {                                              \
+    std::vector<key_type> res;                                                                \
+    self()->for_each_key([&](const key_type& key) { res.emplace_back(key); });                \
+    return res;                                                                               \
+  }                                                                                           \
+                                                                                              \
+  /**                                                                                         \
+   * Retrieve all value views in the data structure.                                          \
+   *                                                                                          \
+   * @return The value views.                                                                 \
+   */                                                                                         \
+  constexpr std::vector<value_type> values() const {                                          \
+    std::vector<value_type> res;                                                              \
+    self()->for_each_value([&](const value_type& value) { res.emplace_back(value); });        \
+    return res;                                                                               \
   }
 
 template <typename Self>
@@ -154,13 +154,13 @@ class container : public self_aware<Self> {
     self()->for_each_lru([&](lru_t lru) { res.emplace_back(lru); });
     return res;
   }
-  
+
   /**
    * Retrieve all "valid" states in the data structucre.
    *
    * @return The states.
    */
-   inline std::vector<state_t> states() const {
+  inline std::vector<state_t> states() const {
     std::vector<state_t> res;
     self()->for_each_state([&](state_t state) { res.emplace_back(state); });
     return res;
@@ -176,7 +176,6 @@ class container : public self_aware<Self> {
     self()->render(os);
     return os.str();
   }
-  
 
   /**
    * Render the data structure to an output stream.
@@ -238,12 +237,12 @@ class wrapped_pos : public wrapped<Inner> {
 
  protected:
   using base_type::inner_;
- 
+
   constexpr explicit wrapped_pos(const inner_type& v) noexcept : base_type{v} {}
   constexpr explicit wrapped_pos(inner_type&& v) noexcept : base_type{std::move(v)} {}
 };
 
-template<typename Self, typename Inner, typename DifferenceType>
+template <typename Self, typename Inner, typename DifferenceType>
 class wrapped_iterator : public self_aware<Self>, public wrapped<Inner> {
  public:
   using self_type = typename self_aware<Self>::self_type;
@@ -271,7 +270,7 @@ class wrapped_iterator : public self_aware<Self>, public wrapped<Inner> {
   constexpr explicit wrapped_iterator(inner_type&& inner) noexcept : base_type{std::move(inner)} {}
 };
 
-template<typename Self, typename Inner>
+template <typename Self, typename Inner>
 class wrapped_map_iterator : public wrapped_iterator<Self, Inner, typename Inner::difference_type> {
  public:
   using base_type = wrapped_iterator<Self, Inner, typename Inner::difference_type>;
@@ -330,4 +329,4 @@ class nested_container : public self_aware<Self> {
   using value_type = Value;
 };
 
-} // namespace nvhm
+}  // namespace nvhm

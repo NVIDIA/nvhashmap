@@ -22,8 +22,7 @@
 
 namespace nvhm {
 
-
-template<typename Key, typename Value = void, flags_t Flags = flags_t::none, int_t KernelSize = default_kernel_size>
+template <typename Key, typename Value = void, flags_t Flags = flags_t::none, int_t KernelSize = default_kernel_size>
 class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
  public:
   using base_type = self_aware<conf<Key, Value, Flags, KernelSize>>;
@@ -38,29 +37,29 @@ class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
   constexpr static int_t kernel_size{KernelSize};
 
   // Reserve bias for growth (relative number of empty slots).
-  constexpr static int_t min_grow_bias{2}; // 50%
+  constexpr static int_t min_grow_bias{2};                // 50%
   constexpr static int_t max_grow_bias{cache_line_size};  // 1.5625% (if `cache_line_size` is 64)
   static_assert(min_grow_bias <= max_grow_bias);
-  
-  constexpr static int_t default_grow_bias{8}; // 12.5%
+
+  constexpr static int_t default_grow_bias{8};  // 12.5%
   static_assert(default_grow_bias >= min_grow_bias && default_grow_bias <= max_grow_bias);
 
   // Reserve bias for scrubbing (relative number of tombstone slots).
-  constexpr static int_t min_scrub_bias{2};      // 50%
+  constexpr static int_t min_scrub_bias{2};                // 50%
   constexpr static int_t max_scrub_bias{cache_line_size};  // 98.4375% (if `cache_line_size` is 64)
   static_assert(min_scrub_bias <= max_scrub_bias);
-  
+
   constexpr static int_t default_scrub_bias{4};  // 25%
   static_assert(default_scrub_bias >= min_scrub_bias && default_scrub_bias <= max_scrub_bias);
 
   // Reserve bias for shrink (relative number of non-hash slots).
-  constexpr static int_t min_shrink_bias{3};      // 33% before shrink, 66% after shrink.
+  constexpr static int_t min_shrink_bias{3};                // 33% before shrink, 66% after shrink.
   constexpr static int_t max_shrink_bias{cache_line_size};  // 1.5625% before shrink, 3.125% after shrink (if `cache_line_size` is 64).
   static_assert(min_shrink_bias <= max_shrink_bias);
-  
+
   constexpr static int_t default_shrink_bias{4};  // 25% before shrink, 50 after shrink.
   static_assert(default_shrink_bias >= min_shrink_bias && default_shrink_bias <= max_shrink_bias);
-  
+
   constexpr static int_t min_capacity_limit(int_t grow_bias) noexcept {
     // Not much point in having a table that is smaller than the size of a cache line.
     const int_t n{std::max(bit_ceil(grow_bias), kernel_size)};
@@ -189,7 +188,7 @@ class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
     const int_t size{capacity - num_not_hash};
     return capacity > min_capacity_ && size * shrink_bias_ <= capacity;
   }
-  
+
   constexpr int_t grow_threshold(int_t capacity) const noexcept {
     const int_t grow_bias{grow_bias_};
     capacity = std::max(capacity, min_capacity_);
@@ -240,4 +239,4 @@ class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
   int_t shrink_bias_{default_shrink_bias};
 };
 
-} // namespace nvhm
+}  // namespace nvhm

@@ -27,12 +27,12 @@ namespace nvhm {
 // template <typename Key>
 // constexpr int_t key_to_shard(const Key& k, const bitmask_t shard_mask) noexcept {
 //   hash_t h{hasher<Key>(k)};
-// 
+//
 //   // TODO: Not yet configurable because we may want to change that later.
 //   constexpr uint64_t c{UINT64_C(0x63a0'8307'3c4c'e4a1)};
 //   const auto h128{static_cast<__uint128_t>(h) * c};
 //   h = static_cast<hash_t>(h128 >> 64) + static_cast<hash_t>(h128);
-// 
+//
 //   return h & shard_mask;
 // }
 
@@ -89,7 +89,7 @@ class sharded_pos : public wrapped_pos<Inner> {
 
   template <typename>
   friend class sharded;
-  
+
   template <typename ReadPos, typename WriteInner>
   friend ReadPos downgrade(sharded_write_pos<WriteInner>&&) noexcept;
 };
@@ -115,7 +115,7 @@ class sharded_write_pos : public sharded_pos<Inner> {
  public:
   using base_type = sharded_pos<Inner>;
   using inner_type = typename base_type::inner_type;
-  
+
   sharded_write_pos() = delete;
   constexpr sharded_write_pos(const sharded_write_pos&) noexcept = default;
   constexpr sharded_write_pos& operator=(const sharded_write_pos&) noexcept = default;
@@ -217,8 +217,8 @@ class sharded : public container<sharded<Shard>> {
     template <typename RhsSelf, typename RhsInner, typename RhsOuter>
     constexpr friend difference_type operator-(self_type lhs, const iterator_base<RhsSelf, RhsInner, RhsOuter>& rhs) {
       difference_type n{};
-      for (; lhs < rhs; ++lhs) { --n; }
-      for (; lhs > rhs; --lhs) { ++n; }
+      for (; lhs < rhs; ++lhs) --n;
+      for (; lhs > rhs; --lhs) ++n;
       return n;
     }
 
@@ -260,7 +260,7 @@ class sharded : public container<sharded<Shard>> {
     template <typename, typename, typename>
     friend class iterator_base;
   };
-  
+
   class const_iterator : public iterator_base<const_iterator, shard_const_iterator_type, const std::vector<shard_type>> {
    public:
     using base_type = iterator_base<const_iterator, shard_const_iterator_type, const std::vector<shard_type>>;
@@ -332,11 +332,9 @@ class sharded : public container<sharded<Shard>> {
   template <typename... ShardArgs>
   constexpr sharded(const int_t num_shards, ShardArgs&&... shard_args) {
     if (num_shards < 1 || num_shards > max_num_shards || !has_single_bit(num_shards)) {
-      throw std::out_of_range(
-        "Number of shards must be within [1, max_num_shards] and a power of 2."
-      );
+      throw std::out_of_range("Number of shards must be within [1, max_num_shards] and a power of 2.");
     }
-    
+
     shards_.reserve(to_uint(num_shards));
     for (int_t i{1}; i < num_shards; ++i) {
       shards_.emplace_back(shard_args...);
@@ -355,7 +353,7 @@ class sharded : public container<sharded<Shard>> {
     return to_shard(key).first.all_values_for(key);
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr const_entry_type at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.at(pos.inner_);
   }
@@ -384,7 +382,7 @@ class sharded : public container<sharded<Shard>> {
     return {shards_.back().end(), shards_, n - 1};
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr const blob_t* blob_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.blob_at(pos.inner_);
   }
@@ -392,22 +390,24 @@ class sharded : public container<sharded<Shard>> {
     return to_shard(pos).first.blob_at(pos.inner_);
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr int_t bucket_size_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_size_at(pos.inner_);
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr int_t bucket_num_empty_slots_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_num_empty_slots_at(pos.inner_);
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr int_t bucket_num_tombstone_slots_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_num_tombstone_slots_at(pos.inner_);
   }
 
   constexpr int_t capacity() const {
     int_t n{};
-    for (const shard_type& shard : shards_) n += shard.capacity();
+    for (const shard_type& shard : shards_) {
+      n += shard.capacity();
+    }
     return n;
   }
 
@@ -425,14 +425,18 @@ class sharded : public container<sharded<Shard>> {
 
   constexpr int_t clear() {
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.clear();
+    for (shard_type& shard : shards_) {
+      n += shard.clear();
+    }
     return n;
   }
   constexpr int_t clear(int_t new_capacity) {
     new_capacity = ceil_div(new_capacity, num_shards());
 
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.clear(new_capacity);
+    for (shard_type& shard : shards_) {
+      n += shard.clear(new_capacity);
+    }
     return n;
   }
 
@@ -442,7 +446,7 @@ class sharded : public container<sharded<Shard>> {
   constexpr bool contains(const key_type& key, const prefetch_hint& hint) const {
     return to_shard(key, hint).first.contains(key, hint.inner());
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr bool contains_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.contains_at(pos.inner_);
   }
@@ -453,28 +457,28 @@ class sharded : public container<sharded<Shard>> {
     static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
 
     int_t n{};
-    for_each_shard_(
-      [&](const shard_type& shard, shard_idx_t i) {
-        n += shard.count_if(
-          [&](shard_read_pos_type&& pos) { return pred(read_pos{std::move(pos), i}); }
-        );
-      }
-    );
+    for_each_shard_([&](const shard_type& shard, shard_idx_t i) {
+      n += shard.count_if([&](shard_read_pos_type&& pos) {
+        return pred(read_pos{std::move(pos), i});
+      });
+    });
     return n;
   }
   constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const {
-    for (const shard_type& shard : shards_) shard.count_kernel_populations(counts);
+    for (const shard_type& shard : shards_) {
+      shard.count_kernel_populations(counts);
+    }
   }
   constexpr void count_state_collisions(std::array<int_t, kernel_size>& counts) const {
-    for (const shard_type& shard : shards_) shard.count_state_collisions(counts);
+    for (const shard_type& shard : shards_) {
+      shard.count_state_collisions(counts);
+    }
   }
 
   constexpr const_iterator end() const { return {shards_.back().end(), shards_, num_shards() - 1}; }
   constexpr iterator end() { return {shards_.back().end(), shards_, num_shards() - 1}; }
 
-  constexpr bool erase(const key_type& key) {
-    return to_shard(key).first.erase(key);
-  }
+  constexpr bool erase(const key_type& key) { return to_shard(key).first.erase(key); }
   constexpr bool erase(const key_type& key, const prefetch_hint& hint) {
     return to_shard(key, hint).first.erase(key, hint.inner());
   }
@@ -510,13 +514,11 @@ class sharded : public container<sharded<Shard>> {
     static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos&) -> bool");
 
     int_t n{};
-    for_each_shard_(
-      [&](shard_type& shard, shard_idx_t i) {
-        n += shard.erase_if(
-          [&](shard_write_pos_type&& pos) { return pred(write_pos{std::move(pos), i}); }
-        );
-      }
-    );
+    for_each_shard_([&](shard_type& shard, shard_idx_t i) {
+      n += shard.erase_if([&](shard_write_pos_type&& pos) {
+        return pred(write_pos{std::move(pos), i});
+      });
+    });
     return n;
   }
   constexpr int_t erase_all(const key_type& key) { return to_shard(key).first.erase_all(key); }
@@ -565,9 +567,9 @@ class sharded : public container<sharded<Shard>> {
     const shard_idx_t end{num_shards()};
 
     for (shard_idx_t i{}; i < end; ++i) {
-      shard_read_pos_type pos{shards_[to_uint(i)].find_if(
-        [&](shard_read_pos_type&& pos) { return pred(read_pos{std::move(pos), i}); }
-      )};
+      shard_read_pos_type pos{shards_[to_uint(i)].find_if([&](shard_read_pos_type&& pos) {
+        return pred(read_pos{std::move(pos), i});
+      })};
       if (pos != npos) return read_pos{std::move(pos), i};
     }
     return read_npos();
@@ -576,11 +578,9 @@ class sharded : public container<sharded<Shard>> {
     const auto [shard, i]{to_shard(key)};
 
     std::vector<read_pos> res;
-    shard.for_each(key,
-      [&](shard_read_pos_type&& pos, const probe_seq_type&) {
-        res.emplace_back(std::move(pos), i);
-      }
-    );
+    shard.for_each(key, [&](shard_read_pos_type&& pos, const probe_seq_type&) {
+      res.emplace_back(std::move(pos), i);
+    });
     return res;
   }
 
@@ -588,61 +588,75 @@ class sharded : public container<sharded<Shard>> {
   constexpr void for_each(const Func& func) const {
     static_assert(std::is_invocable_v<Func, read_pos>, "`func` must be a `func(read_pos)`!");
 
-    for_each_shard_(
-      [&](const shard_type& shard, shard_idx_t i) {
-        shard.for_each([&](shard_read_pos_type&& pos) { func(read_pos{std::move(pos), i}); });
-      }
-    );
+    for_each_shard_([&](const shard_type& shard, shard_idx_t i) {
+      shard.for_each([&](shard_read_pos_type&& pos) { func(read_pos{std::move(pos), i}); });
+    });
   }
   template <typename Func>
   constexpr void for_each(const Func& func) {
     if constexpr (std::is_invocable_v<Func, read_pos>) {
       cself()->for_each(func);
     } else if constexpr (std::is_invocable_v<Func, write_pos>) {
-      for_each_shard_(
-        [&](shard_type& shard, shard_idx_t i) {
-          shard.for_each([&](shard_write_pos_type&& pos) { func(write_pos{std::move(pos), i}); });
-        }
-      );
+      for_each_shard_([&](shard_type& shard, shard_idx_t i) {
+        shard.for_each([&](shard_write_pos_type&& pos) { func(write_pos{std::move(pos), i}); });
+      });
     } else {
       static_assert(dependent_false_v<Func>, "`func` must be a `func(read_pos)` or `func(write_pos)`!");
     }
   }
   template <typename Func>
   constexpr void for_each_blob(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_blob(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_blob(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_blob(const Func& func) {
-    for (shard_type& shard : shards_) shard.for_each_blob(func);
+    for (shard_type& shard : shards_) {
+      shard.for_each_blob(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_entry(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_entry(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_entry(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_entry(const Func& func) {
-    for (shard_type& shard : shards_) shard.for_each_entry(func);
+    for (shard_type& shard : shards_) {
+      shard.for_each_entry(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_key(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_key(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_key(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_lru(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_lru(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_lru(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_state(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_state(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_state(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_value(const Func& func) const {
-    for (const shard_type& shard : shards_) shard.for_each_value(func);
+    for (const shard_type& shard : shards_) {
+      shard.for_each_value(func);
+    }
   }
   template <typename Func>
   constexpr void for_each_value(const Func& func) {
-    for (shard_type& shard : shards_) shard.for_each_value(func);
+    for (shard_type& shard : shards_) {
+      shard.for_each_value(func);
+    }
   }
 
   template <typename Func>
@@ -650,9 +664,9 @@ class sharded : public container<sharded<Shard>> {
     static_assert(std::is_invocable_v<Func, read_pos, probe_seq_type>, "`func` must be `func(read_pos, probe_seq_type)`!");
 
     const auto [shard, i]{to_shard(key)};
-    shard.for_each(key,
-      [&](shard_read_pos_type&& pos, const probe_seq_type& seq) { func(read_pos{std::move(pos), i}, seq); }
-    );
+    shard.for_each(key, [&](shard_read_pos_type&& pos, const probe_seq_type& seq) {
+      func(read_pos{std::move(pos), i}, seq);
+    });
   }
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) {
@@ -661,9 +675,9 @@ class sharded : public container<sharded<Shard>> {
     if constexpr (std::is_invocable_v<Func, read_pos, probe_seq_type>) {
       cself()->for_each(key, func);
     } else if constexpr (std::is_invocable_v<Func, write_pos, probe_seq_type>) {
-      shard.for_each(key,
-        [&](shard_write_pos_type&& pos, const probe_seq_type& seq) { func(write_pos{std::move(pos), i}, seq); }
-      );
+      shard.for_each(key, [&](shard_write_pos_type&& pos, const probe_seq_type& seq) {
+        func(write_pos{std::move(pos), i}, seq);
+      });
     } else {
       static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos, probe_seq_type)` or `func(write_pos, probe_seq_type)`!");
     }
@@ -680,7 +694,9 @@ class sharded : public container<sharded<Shard>> {
 
   constexpr int_t grow() {
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.grow();
+    for (shard_type& shard : shards_) {
+      n += shard.grow();
+    }
     return n;
   }
 
@@ -724,7 +740,7 @@ class sharded : public container<sharded<Shard>> {
   constexpr const key_type& key_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.key_at(pos.inner_);
   }
-  
+
   constexpr double load_factor() const noexcept {
     int_t s{}, c{};
     for (const shard_type& shard : shards_) {
@@ -734,7 +750,7 @@ class sharded : public container<sharded<Shard>> {
     return static_cast<double>(s) / static_cast<double>(c);
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr lru_t lru_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.lru_at(pos.inner_);
   }
@@ -747,23 +763,27 @@ class sharded : public container<sharded<Shard>> {
     return to_shard(pos).first.mapped_at(pos.inner_);
   }
 
-  constexpr double max_load_factor() const {
-    return shards_.front().max_load_factor();
-  }
+  constexpr double max_load_factor() const { return shards_.front().max_load_factor(); }
 
   constexpr int_t num_empty_slots() const {
     int_t n{};
-    for (const shard_type& shard : shards_) n += shard.num_empty_slots();
+    for (const shard_type& shard : shards_) {
+      n += shard.num_empty_slots();
+    }
     return n;
   }
   constexpr int_t num_not_hash_slots() const {
     int_t n{};
-    for (const shard_type& shard : shards_) n += shard.num_not_hash_slots();
+    for (const shard_type& shard : shards_) {
+      n += shard.num_not_hash_slots();
+    }
     return n;
   }
   constexpr int_t num_tombstone_slots() const {
     int_t n{};
-    for (const shard_type& shard : shards_) n += shard.num_tombstone_slots();
+    for (const shard_type& shard : shards_) {
+      n += shard.num_tombstone_slots();
+    }
     return n;
   }
   constexpr shard_idx_t num_shards() const noexcept { return to_int(shards_.size()); }
@@ -778,26 +798,31 @@ class sharded : public container<sharded<Shard>> {
   constexpr void read_prefetch(const key_type& key, const prefetch_hint& hint) const {
     to_shard(key, hint).first.read_prefetch(key, hint.inner());
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr void read_prefetch_value_at(const pos<InnerPos>& pos) const {
     to_shard(pos).first.read_prefetch_value_at(pos.inner_);
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr void read_prefetch_blob_at(const pos<InnerPos>& pos) const {
     to_shard(pos).first.read_prefetch_blob_at(pos.inner_);
   }
 
-  constexpr void render(std::ostream& os, bool with_values = has_values, blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide) const {
+  constexpr void render(
+    std::ostream& os, bool with_values = has_values,
+    blob_render_t with_blobs = has_blobs ? blob_render_t::size : blob_render_t::hide
+  ) const {
     for (const shard_type& shard : shards_) {
       shard.render(os, with_values, with_blobs);
     }
   }
-  
+
   constexpr int_t reserve(int_t new_capacity) {
     new_capacity = ceil_div(new_capacity, num_shards());
 
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.reserve(new_capacity);
+    for (shard_type& shard : shards_) {
+      n += shard.reserve(new_capacity);
+    }
     return n;
   }
 
@@ -805,13 +830,17 @@ class sharded : public container<sharded<Shard>> {
     new_capacity = ceil_div(new_capacity, num_shards());
 
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.resize(new_capacity);
+    for (shard_type& shard : shards_) {
+      n += shard.resize(new_capacity);
+    }
     return n;
   }
 
   constexpr int_t scrub(lru_t threshold = max_lru) {
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.scrub(threshold);
+    for (shard_type& shard : shards_) {
+      n += shard.scrub(threshold);
+    }
     return n;
   }
 
@@ -822,20 +851,24 @@ class sharded : public container<sharded<Shard>> {
     to_shard(pos).first.set_blob_at(pos.inner_, src, n);
   }
 
-  template<typename V>
+  template <typename V>
   constexpr void set_value_at(const write_pos& pos, V&& value) {
     to_shard(pos).first.set_value_at(pos.inner_, std::forward<V>(value));
   }
 
   constexpr int_t shrink() {
     int_t n{};
-    for (shard_type& shard : shards_) n += shard.shrink();
+    for (shard_type& shard : shards_) {
+      n += shard.shrink();
+    }
     return n;
   }
 
   constexpr int_t size() const {
     int_t n{};
-    for (const shard_type& shard : shards_) n += shard.size();
+    for (const shard_type& shard : shards_) {
+      n += shard.size();
+    }
     return n;
   }
 
@@ -873,7 +906,7 @@ class sharded : public container<sharded<Shard>> {
     return {shards_[to_uint(i)], i};
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos) const {
     shard_idx_t i{to_shard_idx(pos)};
     return {shards_[to_uint(i)], i};
@@ -882,7 +915,7 @@ class sharded : public container<sharded<Shard>> {
     shard_idx_t i{to_shard_idx(pos)};
     return {shards_[to_uint(i)], i};
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos, const key_type& key) const {
     shard_idx_t i{to_shard_idx(pos, key)};
     return {shards_[to_uint(i)], i};
@@ -891,7 +924,7 @@ class sharded : public container<sharded<Shard>> {
     shard_idx_t i{to_shard_idx(pos, key)};
     return {shards_[to_uint(i)], i};
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
     shard_idx_t i{to_shard_idx(pos, key, hint)};
     return {shards_[to_uint(i)], i};
@@ -908,19 +941,19 @@ class sharded : public container<sharded<Shard>> {
     NVHM_ASSUME_((prefetch_hint{key, shard_mask_()} == hint));
     return hint.shard_idx();
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos) const {
     shard_idx_t i{pos.shard_idx_};
     NVHM_ASSUME_(i >= 0 && i < num_shards(), "i = ", i, ", num_shards = ", num_shards());
     return i;
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos, const key_type& key) const {
     shard_idx_t i{to_shard_idx(pos)};
     NVHM_ASSUME_(i == to_shard_idx(key), "i = ", i, ", to_shard_idx(key) = ", to_shard_idx(key));
     return i;
   }
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
     shard_idx_t i{to_shard_idx(pos, key)};
     NVHM_ASSUME_(i == hint.shard_idx(), "i = ", i, ", hint.shard_idx = ", hint.shard_idx());
@@ -965,9 +998,9 @@ class sharded : public container<sharded<Shard>> {
     const shard_idx_t end{num_shards()};
 
     for (shard_idx_t i{}; i < end; ++i) {
-      shard_write_pos_type pos{shards_[to_uint(i)].update_if(
-        [&](shard_write_pos_type&& pos) { return pred(write_pos{std::move(pos), i}); }
-      )};
+      shard_write_pos_type pos{shards_[to_uint(i)].update_if([&](shard_write_pos_type&& pos) {
+        return pred(write_pos{std::move(pos), i});
+      })};
       if (pos != npos) return write_pos{std::move(pos), i};
     }
     return write_npos();
@@ -976,15 +1009,13 @@ class sharded : public container<sharded<Shard>> {
     auto [shard, i]{to_shard(key)};
 
     std::vector<write_pos> res;
-    shard.for_each(key,
-      [&](shard_write_pos_type&& pos, const probe_seq_type&) {
-        res.emplace_back(std::move(pos), i);
-      }
-    );
+    shard.for_each(key, [&](shard_write_pos_type&& pos, const probe_seq_type&) {
+      res.emplace_back(std::move(pos), i);
+    });
     return res;
   }
 
-  template<typename InnerPos>
+  template <typename InnerPos>
   constexpr const value_type& value_at(const pos<InnerPos>& pos) const {
     return to_shard(pos).first.value_at(pos.inner_);
   }
@@ -1051,4 +1082,4 @@ class sharded : public container<sharded<Shard>> {
 };
 
 #pragma GCC diagnostic pop
-}
+}  // namespace nvhm

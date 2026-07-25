@@ -237,7 +237,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
     const value_type* const __restrict l_values{lhs.values_.get()};
     const blob_t* const __restrict l_blobs{lhs.blobs_.get()};
     const key_type* const __restrict l_keys{lhs.keys_.get()};
-    
+
     const int_t r_blob_stride{rhs.conf_.blob_stride()};
     const value_type* const __restrict r_values{rhs.values_.get()};
     const blob_t* const __restrict r_blobs{rhs.blobs_.get()};
@@ -273,7 +273,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
 
     std::swap(lhs.keys_, rhs.keys_);
   }
-  
+
  protected:
   using base_type::conf_;
   using base_type::bucket_mask_;
@@ -325,7 +325,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
       return keys[pos];
     }
   }
-  
+
   constexpr bool contains_at_(raw_pos_t pos) const noexcept {
     return is_hash(self()->state_at_(pos));
   }
@@ -337,7 +337,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
 
   constexpr void read_prefetch_(const hash_t hash) const noexcept {
     const bitmask_t bucket_mask{bucket_mask_};
-    
+
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     NVHM_ASSERT_(seq.has_next(), "Probe sequence is incompatible!");
 
@@ -349,13 +349,13 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
       nvhm::read_prefetch<kernel_size>(&keys_[to_uint(off)]);
     }
   }
-  
+
   constexpr void write_prefetch_(const hash_t hash) noexcept {
     const bitmask_t bucket_mask{bucket_mask_};
 
     probe_seq_type seq{hash_to_pos<kernel_size>(hash)};
     NVHM_ASSERT_(seq.has_next(), "Probe sequence is incompatible!");
-    
+
     const raw_pos_t off{align_pos(seq.next(), bucket_mask)};
     self()->write_prefetch_states_(off);
 
@@ -366,4 +366,4 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
   }
 };
 
-} // namespace nvhm
+}  // namespace nvhm
