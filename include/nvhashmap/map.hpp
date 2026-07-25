@@ -74,7 +74,7 @@ class map : public swiss_map_base<
     num_empty_ = other.num_empty_;
     num_tombstone_ = other.num_tombstone_;
   }
-  constexpr map& operator=(const map& __restrict other) {
+  constexpr map& operator=(const map& other) {
     if (self() == &other) return *self();
     base_type::operator=(other);
 

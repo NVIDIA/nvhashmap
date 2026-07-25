@@ -651,7 +651,7 @@ struct sse_kernel final : public kernel<-128, -127, false> {
   constexpr static bitmask_t size_mask{size_mask_v<size>};
 
   using mask_type = uint32_mask16_1r_t;
-  static_assert(mask_type::max_count == size && mask_type::max_num_bits == size * 2);
+  static_assert(mask_type::max_count == size && mask_type::num_bits_max == size * 2);
   using mask_repr_type = typename mask_type::repr_type;
 
   constexpr static mask_repr_type full_mask{mask_type::full()};

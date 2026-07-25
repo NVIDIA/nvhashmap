@@ -13,6 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NVHM_HAVE_LIBSTDCXX)
+  set(NVHM_DEBUG_HARDENING _GLIBCXX_ASSERTIONS)
+elseif(NVHM_HAVE_LIBCXX_HARDENING)
+  set(NVHM_DEBUG_HARDENING _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE)
+elseif(NVHM_HAVE_LIBCXX)
+  set(NVHM_DEBUG_HARDENING _LIBCPP_ENABLE_ASSERTIONS=1)
+else()
+  set(NVHM_DEBUG_HARDENING "")
+endif()
+message(STATUS "NVHM_DEBUG_HARDENING = ${NVHM_DEBUG_HARDENING}")
+
+if(NVHM_DEBUG_HARDENING)
+  add_compile_definitions(
+    $<$<CONFIG:Debug>:${NVHM_DEBUG_HARDENING}>
+  )
+endif()
+
 add_subdirectory(compile)
 
 add_executable(test_basics test_basics.cpp)

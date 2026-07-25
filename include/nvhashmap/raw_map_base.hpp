@@ -189,13 +189,10 @@ class raw_map_base : public container<Self> {
     }
 
     template <typename RhsSelf, typename RhsOuter>
-    constexpr friend difference_type operator-(const iterator_base& lhs, const iterator_base<RhsSelf, RhsOuter>& rhs) {
-      iterator_base l{lhs};
-      iterator_base<RhsSelf, RhsOuter> r{rhs};
-
+    constexpr friend difference_type operator-(self_type lhs, const iterator_base<RhsSelf, RhsOuter>& rhs) {
       difference_type n{};
-      for (; l < r; ++l) { --n; }
-      for (; l > r; --l) { ++n; }
+      for (; lhs < rhs; ++lhs) { --n; }
+      for (; lhs > rhs; --lhs) { ++n; }
       return n;
     }
 

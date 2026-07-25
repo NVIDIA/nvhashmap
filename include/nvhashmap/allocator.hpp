@@ -123,7 +123,8 @@ class deleter_base {
   }
 
   constexpr void operator()(T* p) const {
-    if constexpr (!std::is_trivially_destructible_v<T>) {
+    // TODO: This is kind of a hack. We should switch having per entry lifetime management.
+    if constexpr (!std::is_trivially_default_constructible_v<T> && !std::is_trivially_destructible_v<T>) {
       std::destroy_n(p, n_);
     }
   }

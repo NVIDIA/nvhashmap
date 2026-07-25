@@ -142,25 +142,26 @@ using bitset_mask128_t = bitset_mask<128>;
 using bitset_mask256_t = bitset_mask<256>;
 using bitset_mask512_t = bitset_mask<512>;
 
-template <typename Repr, int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
+template <typename Repr, int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
 struct uint_mask final : public mask {
   using repr_type = Repr;
   static_assert(is_unsigned_v<repr_type> && sizeof(repr_type) >= sizeof(uint32_t));
 
-  constexpr static int_t max_num_bits{num_bits_v<repr_type>};
-  static_assert(has_single_bit(max_num_bits));
+  constexpr static int_t num_bits_max{num_bits_v<repr_type>};
+  static_assert(has_single_bit(num_bits_max));
 
-  constexpr static int_t num_bits{NumBits};
-  static_assert(num_bits > 0 && num_bits <= max_num_bits);
-  static_assert(has_single_bit(num_bits));
+  constexpr static int_t num_bits_used{NumBitsUsed};
+  static_assert(num_bits_used > 0 && num_bits_used <= num_bits_max);
+  static_assert(has_single_bit(num_bits_used));
 
   constexpr static int_t bits_per_slot{BitsPerSlot};
   static_assert(bits_per_slot > 0 && bits_per_slot <= 8);
   static_assert(has_single_bit(bits_per_slot));
-  static_assert(num_bits % bits_per_slot == 0);
+  static_assert(num_bits_used % bits_per_slot == 0);
+
   constexpr static int_t shift{countr_zero(bits_per_slot)};
-  constexpr static int_t max_count{num_bits / bits_per_slot};
-  constexpr static bool fully_utilized{max_count * bits_per_slot == max_num_bits};
+  constexpr static int_t max_count{num_bits_used / bits_per_slot};
+  constexpr static bool fully_utilized{max_count * bits_per_slot == num_bits_max};
 
   constexpr static mask_align_t alignment{Alignment};
   static_assert(alignment == mask_align_t::left || alignment == mask_align_t::right);
@@ -232,14 +233,14 @@ struct uint_mask final : public mask {
   constexpr static bool at(repr_type m, int_t i) noexcept { return (m & single(i)) != 0; }
 };
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint32_mask_t = uint_mask<uint32_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint32_mask_t = uint_mask<uint32_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint64_mask_t = uint_mask<uint64_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint64_mask_t = uint_mask<uint64_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
-template <int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint128_mask_t = uint_mask<__uint128_t, NumBits, BitsPerSlot, Alignment>;
+template <int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint128_mask_t = uint_mask<__uint128_t, NumBitsUsed, BitsPerSlot, Alignment>;
 
 using uint32_mask1_1r_t = uint32_mask_t<1, 1, mask_align_t::right>;
 using uint32_mask1_1l_t = uint32_mask_t<1, 1, mask_align_t::left>;
@@ -394,12 +395,12 @@ using uint128_mask128_2l_t = uint128_mask_t<128, 2, mask_align_t::left>;
 using uint128_mask128_4l_t = uint128_mask_t<128, 4, mask_align_t::left>;
 using uint128_mask128_8l_t = uint128_mask_t<128, 8, mask_align_t::left>;
 
-template<int_t NumBits, int_t BitsPerSlot, mask_align_t Alignment>
-using uint_mask_t = std::conditional_t<NumBits * BitsPerSlot <= num_bits_v<uint32_t>,
-  uint32_mask_t<NumBits, BitsPerSlot, Alignment>,
-  std::conditional_t<NumBits * BitsPerSlot <= num_bits_v<uint64_t>,
-    uint64_mask_t<NumBits, BitsPerSlot, Alignment>,
-    uint128_mask_t<NumBits, BitsPerSlot, Alignment>
+template<int_t NumBitsUsed, int_t BitsPerSlot, mask_align_t Alignment>
+using uint_mask_t = std::conditional_t<NumBitsUsed <= num_bits_v<uint32_t>,
+  uint32_mask_t<NumBitsUsed, BitsPerSlot, Alignment>,
+  std::conditional_t<NumBitsUsed <= num_bits_v<uint64_t>,
+    uint64_mask_t<NumBitsUsed, BitsPerSlot, Alignment>,
+    uint128_mask_t<NumBitsUsed, BitsPerSlot, Alignment>
   >>;
 
 }

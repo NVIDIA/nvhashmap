@@ -36,12 +36,6 @@
     make_enum_validator<0 NVHM_MAKE_ENUM_FOR_EACH_(NVHM_MAKE_ENUM_TO_ENUM_CLASS_, _type_name_, __VA_ARGS__)>()\
   };
 
-#if __cplusplus < 202002L
-std::ostream& operator<<(std::ostream& os, const std::chrono::milliseconds& ms) {
-  return os << ms.count() << "ms";
-}
-#endif
-  
 class stopwatch {
  public:
   using time_point_type = std::chrono::steady_clock::time_point;
@@ -255,4 +249,4 @@ inline std::string to_string(Args&&... args) {
   return os.str();
 }
 
-std::random_device rd;
+inline std::random_device rd;

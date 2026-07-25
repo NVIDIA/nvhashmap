@@ -251,6 +251,10 @@ inline std::ostream& operator<<(std::ostream& os, __uint128_t v) {
     }
   }
 
+  if (v == 0) {
+    return os << '0';
+  }
+
   char buffer[64];
   int n{};
   for (; v != 0; v /= base) {

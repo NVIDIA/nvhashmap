@@ -70,10 +70,9 @@ using mm_hint_t = _mm_hint;
 }  // namespace detail
 
 
-template <typename T, int_t Alignment = num_bytes_v<T>>
+template <typename T>
 inline void read_prefetch(const T* p, int_t n) noexcept {
-  static_assert(Alignment % num_bytes_v<T> == 0);
-  read_prefetch(reinterpret_cast<const std::byte*>(assume_aligned<Alignment>(p)), n * num_bytes_v<T>);
+  read_prefetch(reinterpret_cast<const std::byte*>(p), n * num_bytes_v<T>);
 }
 
 /**
@@ -113,13 +112,12 @@ inline void read_prefetch<std::byte>(const std::byte* __restrict p, int_t n) noe
   }
 }
 
-template <int_t N, typename T, int_t Alignment = num_bytes_v<T>>
-constexpr void read_prefetch(const T* p) noexcept { read_prefetch<T, Alignment>(p, N); }
+template <int_t N, typename T>
+constexpr void read_prefetch(const T* p) noexcept { read_prefetch<T>(p, N); }
 
-template <typename T, int_t Alignment = num_bytes_v<T>>
+template <typename T>
 inline void write_prefetch(T* p, int_t n) noexcept {
-  static_assert(Alignment % num_bytes_v<T> == 0);
-  write_prefetch(reinterpret_cast<std::byte*>(assume_aligned<Alignment>(p)), n * num_bytes_v<T>);
+  write_prefetch(reinterpret_cast<std::byte*>(p), n * num_bytes_v<T>);
 }
 
 /**
@@ -153,8 +151,8 @@ inline void write_prefetch<std::byte>(std::byte* __restrict p, int_t n) noexcept
   }
 }
 
-template <int_t N, typename T, int_t Alignment = num_bytes_v<T>>
-constexpr void write_prefetch(T* p) noexcept { write_prefetch<T, Alignment>(p, N); }
+template <int_t N, typename T>
+constexpr void write_prefetch(T* p) noexcept { write_prefetch<T>(p, N); }
 
 }  // namespace nvhm
 

@@ -492,7 +492,7 @@ class logic_error : public std::logic_error {
 
 constexpr bitmask_t make_aligned_mask(int_t n, int_t alignment) noexcept {
   NVHM_ASSERT_(n > 0 && has_single_bit(n));
-  NVHM_ASSERT_(n > 0 && has_single_bit(alignment));
+  NVHM_ASSERT_(alignment > 0 && has_single_bit(alignment));
   NVHM_ASSERT_(n >= alignment, "n = ", n, ", alignment = ", alignment);
   NVHM_ASSERT_(n % alignment == 0, "n = ", n, ", alignment = ", alignment);
   return to_uint(n - alignment);

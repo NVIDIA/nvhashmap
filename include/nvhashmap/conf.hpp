@@ -218,7 +218,6 @@ class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
 
   constexpr friend void swap(conf& lhs, conf& rhs) noexcept {
     if (&lhs == &rhs) return;
-    swap(static_cast<base_type&>(lhs), static_cast<base_type&>(rhs));
 
     std::swap(lhs.min_capacity_, rhs.min_capacity_);
     std::swap(lhs.init_capacity_, rhs.init_capacity_);

@@ -213,15 +213,12 @@ class sharded : public container<sharded<Shard>> {
       }
       return *self();
     }
-  
-    template <typename RhsSelf, typename RhsInner, typename RhsOuter>
-    constexpr friend difference_type operator-(const iterator_base& lhs, const iterator_base<RhsSelf, RhsInner, RhsOuter>& rhs) {
-      iterator_base l{lhs};
-      iterator_base<RhsSelf, RhsInner, RhsOuter> r{rhs};
 
+    template <typename RhsSelf, typename RhsInner, typename RhsOuter>
+    constexpr friend difference_type operator-(self_type lhs, const iterator_base<RhsSelf, RhsInner, RhsOuter>& rhs) {
       difference_type n{};
-      for (; l < r; ++l) { --n; }
-      for (; l > r; --l) { ++n; }
+      for (; lhs < rhs; ++lhs) { --n; }
+      for (; lhs > rhs; --lhs) { ++n; }
       return n;
     }
 

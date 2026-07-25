@@ -313,7 +313,7 @@ class std_map_shim {
   }
 
   template <typename K>
-  constexpr mapped_type operator[](K&& key) { return inner_[key]; }
+  constexpr mapped_type operator[](K&& key) { return inner_[std::forward<K>(key)]; }
 
   constexpr friend bool operator==(const std_map_shim& lhs, const std_map_shim& rhs) {
     return (&lhs == &rhs) || (lhs.inner_ == rhs.inner_);
