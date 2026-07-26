@@ -25,5 +25,6 @@ using namespace nvhm;
 
 int main() {
   using sharded_t = sharded<map<dummy_key, dummy_value, flags_t::all>>;
+  check_iterator_reference_types<sharded<set<dummy_key>>>();
   return compile_map<false, sharded_t>(3);
 }

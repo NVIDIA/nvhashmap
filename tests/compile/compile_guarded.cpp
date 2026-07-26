@@ -25,5 +25,6 @@ using namespace nvhm;
 
 int main() {
   using guarded_t = guarded<map<dummy_key, dummy_value, flags_t::all>>;
+  check_iterator_reference_types<guarded<set<dummy_key>>>();
   return compile_map<true, guarded_t>();
 }
