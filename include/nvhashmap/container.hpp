@@ -290,13 +290,13 @@ class wrapped_map_iterator : public wrapped_iterator<Self, Inner, typename Inner
 
   constexpr blob_type blob() const noexcept { return inner_.blob(); }
   constexpr entry_type entry() const noexcept { return inner_.entry(); }
-  constexpr key_type key() const noexcept { return inner_.key(); }
+  constexpr const key_type& key() const noexcept { return inner_.key(); }
   constexpr lru_t lru() const noexcept { return inner_.lru(); }
   constexpr bool query() const noexcept { return inner_.query(); }
   constexpr value_type value() const noexcept { return inner_.value(); }
   constexpr mapped_type mapped() const noexcept { return inner_.mapped(); }
 
-  constexpr entry_ptr_type operator*() const noexcept { return inner_.operator*(); }
+  constexpr entry_type operator*() const noexcept { return inner_.operator*(); }
   constexpr const entry_ptr_type* operator->() const noexcept { return inner_.operator->(); }
 
  protected:

@@ -50,6 +50,18 @@ struct hash<dummy_key> {
 
 }
 
+template <typename Map>
+constexpr void check_iterator_reference_types() {
+  using key_t = typename Map::key_type;
+  using const_iterator_t = typename Map::const_iterator;
+  using iterator_t = typename Map::iterator;
+
+  static_assert(std::is_same_v<decltype(std::declval<const_iterator_t>().key()), const key_t&>);
+  static_assert(std::is_same_v<decltype(std::declval<iterator_t>().key()), const key_t&>);
+  static_assert(std::is_same_v<decltype(*std::declval<const_iterator_t>()), typename const_iterator_t::entry_type>);
+  static_assert(std::is_same_v<decltype(*std::declval<iterator_t>()), typename iterator_t::entry_type>);
+}
+
 template <bool ThreadSafe, typename Map, typename... Args>
 int compile_map(Args&&... args) {
   using namespace nvhm;
@@ -69,6 +81,8 @@ int compile_map(Args&&... args) {
   using mapped_t = typename map_t::mapped_type;
   using probe_seq_t = typename map_t::probe_seq_type;
   
+  check_iterator_reference_types<map_t>();
+
   conf_t c;
   bool b;
   double d;
