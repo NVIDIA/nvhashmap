@@ -63,79 +63,139 @@ else()
 endif()
 
 # Determine system cache line size.
-if (${CMAKE_HOST_UNIX})
+set(NVHM_HAVE_CACHE_LINE_SIZE "")
+if(NOT NVHM_HAVE_CACHE_LINE_SIZE MATCHES "^[1-9][0-9]*$")
+  set(NVHM_TMP "/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size")
+  if(EXISTS "${NVHM_TMP}")
+    file(READ "${NVHM_TMP}" NVHM_HAVE_CACHE_LINE_SIZE)
+    string(STRIP "${NVHM_HAVE_CACHE_LINE_SIZE}" NVHM_HAVE_CACHE_LINE_SIZE)
+  endif()
+  unset(NVHM_TMP)
+endif()
+if(NOT NVHM_HAVE_CACHE_LINE_SIZE MATCHES "^[1-9][0-9]*$")
+  execute_process(
+    COMMAND sysctl -n hw.cachelinesize
+    OUTPUT_VARIABLE NVHM_HAVE_CACHE_LINE_SIZE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+endif()
+if(NOT NVHM_HAVE_CACHE_LINE_SIZE MATCHES "^[1-9][0-9]*$")
   execute_process(
     COMMAND getconf LEVEL1_DCACHE_LINESIZE
     OUTPUT_VARIABLE NVHM_HAVE_CACHE_LINE_SIZE
-    COMMAND_ERROR_IS_FATAL ANY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
   )
-  string(STRIP "${NVHM_HAVE_CACHE_LINE_SIZE}" NVHM_HAVE_CACHE_LINE_SIZE)
-  message(STATUS "Detected cache line size: ${NVHM_HAVE_CACHE_LINE_SIZE} B")
+endif()
+if(NOT NVHM_HAVE_CACHE_LINE_SIZE MATCHES "^[1-9][0-9]*$")
+  message(WARNING "Could not determine cache line size. Assuming 64 bytes.")
+  set(NVHM_HAVE_CACHE_LINE_SIZE "64")
+endif()
+message(STATUS "Detected cache line size: ${NVHM_HAVE_CACHE_LINE_SIZE} B")
 
+# Determine system memory page size.
+set(NVHM_HAVE_PAGE_SIZE "")
+if(NOT NVHM_HAVE_PAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  execute_process(
+    COMMAND sysctl -n hw.pagesize
+    OUTPUT_VARIABLE NVHM_HAVE_PAGE_SIZE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+endif()
+if(NOT NVHM_HAVE_PAGE_SIZE MATCHES "^[1-9][0-9]*$")
   execute_process(
     COMMAND getconf PAGE_SIZE
     OUTPUT_VARIABLE NVHM_HAVE_PAGE_SIZE
-    COMMAND_ERROR_IS_FATAL ANY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
   )
-  string(STRIP "${NVHM_HAVE_PAGE_SIZE}" NVHM_HAVE_PAGE_SIZE)
-  message(STATUS "Detected page size: ${NVHM_HAVE_PAGE_SIZE} B")
-
-  execute_process(
-    COMMAND grep "Hugepagesize:" /proc/meminfo
-    OUTPUT_VARIABLE NVHM_HAVE_HUGEPAGE_SIZE
-    RESULT_VARIABLE NVHM_RESULT
-  )
-  if(NVHM_RESULT AND NOT NVHM_RESULT EQUAL 0)
-    message(WARNING "Probing `/proc/meminfo` failed!")
-    set(NVHM_HAVE_HUGEPAGE_SIZE "")
-  endif()
-  unset(NVHM_RESULT)
-  string(REGEX MATCH "[0-9]+" NVHM_HAVE_HUGEPAGE_SIZE "${NVHM_HAVE_HUGEPAGE_SIZE}")
-  if(NVHM_HAVE_HUGEPAGE_SIZE STREQUAL "")
-    set(NVHM_HAVE_HUGEPAGE_SIZE "2048")
-  endif()
-  message(STATUS "Detected hugepage size: ${NVHM_HAVE_HUGEPAGE_SIZE} kiB")
-
-  execute_process(
-    COMMAND cat /sys/kernel/mm/hugepages/hugepages-${NVHM_HAVE_HUGEPAGE_SIZE}kB/nr_hugepages
-    OUTPUT_VARIABLE NVHM_HAVE_NUM_HUGEPAGES
-    RESULT_VARIABLE NVHM_RESULT
-  )
-  if(NVHM_RESULT AND NOT NVHM_RESULT EQUAL 0)
-    message(WARNING "Probing `/sys/kernel/mm/hugepages/hugepages-${NVHM_HAVE_HUGEPAGE_SIZE}kB/nr_hugepages` failed!")
-    set(NVHM_HAVE_NUM_HUGEPAGES "0")
-  endif()
-  unset(NVHM_RESULT)
-  
-  string(STRIP "${NVHM_HAVE_NUM_HUGEPAGES}" NVHM_HAVE_NUM_HUGEPAGES)
-  message(STATUS "Detected hugepage amount: ${NVHM_HAVE_NUM_HUGEPAGES} pages")
-  math(EXPR NVHM_HAVE_HUGEPAGE_SIZE "${NVHM_HAVE_HUGEPAGE_SIZE} * 1024")
-  
-  execute_process(
-    COMMAND cat /sys/kernel/mm/transparent_hugepage/enabled
-    OUTPUT_VARIABLE NVHM_HAVE_TRANSPARENT_HUGEPAGES
-    RESULT_VARIABLE NVHM_RESULT
-  )
-  if(NVHM_RESULT AND NOT NVHM_RESULT EQUAL 0)
-    message(WARNING "Probing /sys/kernel/mm/transparent_hugepage/enabled failed!")
-    set(NVHM_HAVE_TRANSPARENT_HUGEPAGES "[madvise]")
-  endif()
-  unset(NVHM_RESULT)
-  string(STRIP "${NVHM_HAVE_TRANSPARENT_HUGEPAGES}" NVHM_HAVE_TRANSPARENT_HUGEPAGES)
-  message(STATUS "Detected transparent hugepage setting: ${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
-  string(REPLACE " " ";" NVHM_HAVE_TRANSPARENT_HUGEPAGES "${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
-  if("[never]" IN_LIST NVHM_HAVE_TRANSPARENT_HUGEPAGES)
-    set(NVHM_HAVE_TRANSPARENT_HUGEPAGES OFF)
-  else()
-    set(NVHM_HAVE_TRANSPARENT_HUGEPAGES ON)
-  endif()
-else()
-  set(NVHM_HAVE_CACHE_LINE_SIZE "64")
-  set(NVHM_HAVE_PAGE_SIZE "4096")
-  set(NVHM_HAVE_HUGEPAGE_SIZE "2097152")
-  set(NVHM_HAVE_NUM_HUGEPAGES "0")
-  set(NVHM_HAVE_TRANSPARENT_HUGEPAGES ON)
 endif()
+if(NOT NVHM_HAVE_PAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  execute_process(
+    COMMAND getconf PAGESIZE
+    OUTPUT_VARIABLE NVHM_HAVE_PAGE_SIZE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+endif()
+if(NOT NVHM_HAVE_PAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  message(WARNING "Could not determine page size. Assuming 4096 bytes.")
+  set(NVHM_HAVE_PAGE_SIZE "4096")
+endif()
+message(STATUS "Detected page size: ${NVHM_HAVE_PAGE_SIZE} B")
+
+# Determine system memory hugepage properties.
+set(NVHM_HAVE_TRANSPARENT_HUGEPAGES OFF)
+if(NOT NVHM_HAVE_TRANSPARENT_HUGEPAGES)
+  set(NVHM_TMP "/sys/kernel/mm/transparent_hugepage/enabled")
+  if(EXISTS "${NVHM_TMP}")
+    file(READ "${NVHM_TMP}" NVHM_TMP)
+    string(STRIP "${NVHM_TMP}" NVHM_TMP)
+    message(STATUS "System's hugepage setting: ${NVHM_TMP}")
+    if(NVHM_TMP MATCHES "\\[([a-z]+)\\]")
+      set(NVHM_TMP "${CMAKE_MATCH_1}")
+      if(NOT NVHM_TMP STREQUAL "never")
+        set(NVHM_HAVE_TRANSPARENT_HUGEPAGES ON)
+      endif()
+    endif()
+  endif()
+  unset(NVHM_TMP)
+endif()
+message(STATUS "Detected transparent hugepages: ${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
+
+set(NVHM_HAVE_HUGEPAGE_SIZE "")
+if(NOT NVHM_HAVE_HUGEPAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  if(EXISTS "/proc/meminfo")
+    file(READ "/proc/meminfo" NVHM_TMP)
+    if(NVHM_TMP MATCHES "Hugepagesize:[ \t]*([1-9][0-9]*)[ \t]*kB")
+      math(EXPR NVHM_HAVE_HUGEPAGE_SIZE "${CMAKE_MATCH_1} * 1024")
+    endif()
+    unset(NVHM_TMP)
+  endif()
+endif()
+if(NOT NVHM_HAVE_HUGEPAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  set(NVHM_TMP "/sys/kernel/mm/transparent_hugepage/hpage_pmd_size")
+  if(EXISTS "${NVHM_TMP}")
+    file(READ "${NVHM_TMP}" NVHM_HAVE_HUGEPAGE_SIZE)
+    string(STRIP "${NVHM_HAVE_HUGEPAGE_SIZE}" NVHM_HAVE_HUGEPAGE_SIZE)
+  endif()
+  unset(NVHM_TMP)
+endif()
+if(NOT NVHM_HAVE_HUGEPAGE_SIZE MATCHES "^[1-9][0-9]*$")
+  message(WARNING "Could not determine hugepage size. Assuming 2097152 bytes.")
+  set(NVHM_HAVE_HUGEPAGE_SIZE "2097152")
+endif()
+message(STATUS "Detected hugepage size: ${NVHM_HAVE_HUGEPAGE_SIZE} B")
+
+set(NVHM_HAVE_NUM_HUGEPAGES "")
+message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE1: ${NVHM_HAVE_HUGEPAGE_SIZE}")
+if(NOT NVHM_HAVE_NUM_HUGEPAGES MATCHES "^[0-9]+$")
+  if(EXISTS "/proc/meminfo")
+    file(READ "/proc/meminfo" NVHM_TMP)
+    if(NVHM_TMP MATCHES "HugePages_Total:[ \t]*([0-9]+)")
+      set(NVHM_HAVE_NUM_HUGEPAGES "${CMAKE_MATCH_1}")
+    endif()
+    unset(NVHM_TMP)
+  endif()
+endif()
+message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE2: ${NVHM_HAVE_HUGEPAGE_SIZE}")
+if(NOT NVHM_HAVE_NUM_HUGEPAGES MATCHES "^[0-9]+$")
+  math(EXPR NVHM_TMP "${NVHM_HAVE_HUGEPAGE_SIZE} / 1024")
+  set(NVHM_TMP "/sys/kernel/mm/hugepages/hugepages-${NVHM_TMP}kB/nr_hugepages")
+  if(EXISTS "${NVHM_TMP}")
+    file(READ "${NVHM_TMP}" NVHM_HAVE_NUM_HUGEPAGES)
+    string(STRIP "${NVHM_HAVE_NUM_HUGEPAGES}" NVHM_HAVE_NUM_HUGEPAGES)
+  endif()
+  unset(NVHM_TMP)
+endif()
+message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE3: ${NVHM_HAVE_HUGEPAGE_SIZE}")
+if(NOT NVHM_HAVE_NUM_HUGEPAGES MATCHES "^[0-9]+$")
+  message(WARNING "Could not determine hugepage amount. Assuming 0 pages.")
+  set(NVHM_HAVE_NUM_HUGEPAGES "0")
+endif()
+message(STATUS "Detected hugepage amount: ${NVHM_HAVE_NUM_HUGEPAGES} pages")
 
 # Determine CPU features.
 include(CheckCXXSourceCompiles)
@@ -164,6 +224,23 @@ check_cxx_source_compiles("
   #else
   #error libc++ hardening modes not available!
   #endif" NVHM_HAVE_LIBCXX_HARDENING
+)
+
+check_cxx_source_compiles("
+  #include <sys/mman.h>
+  #if defined(MADV_HUGEPAGE)
+  int main() { return 0; }
+  #else
+  #error madvise hugepages are not available!
+  #endif" NVHM_HAVE_MADVISE_HUGEPAGE
+)
+check_cxx_source_compiles("
+  #include <sys/mman.h>
+  #if defined(MAP_HUGETLB) && defined(MAP_HUGE_SHIFT)
+  int main() { return 0; }
+  #else
+  #error Hugetable mmap flags are not available!
+  #endif" NVHM_HAVE_MMAP_HUGETLB
 )
 
 check_cxx_source_compiles("
@@ -284,14 +361,16 @@ else()
 endif()
 set(CMAKE_REQUIRED_FLAGS "")
 
+message(STATUS "NVHM_HAVE_CACHE_LINE_SIZE       = ${NVHM_HAVE_CACHE_LINE_SIZE}"      )
+message(STATUS "NVHM_HAVE_PAGE_SIZE             = ${NVHM_HAVE_PAGE_SIZE}"            )
+message(STATUS "NVHM_HAVE_TRANSPARENT_HUGEPAGES = ${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
+message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE         = ${NVHM_HAVE_HUGEPAGE_SIZE}"        )
+message(STATUS "NVHM_HAVE_NUM_HUGEPAGES         = ${NVHM_HAVE_NUM_HUGEPAGES}"        )
 message(STATUS "NVHM_HAVE_LIBSTDCXX             = ${NVHM_HAVE_LIBSTDCXX}"            )
 message(STATUS "NVHM_HAVE_LIBCXX                = ${NVHM_HAVE_LIBCXX}"               )
 message(STATUS "NVHM_HAVE_LIBCXX_HARDENING      = ${NVHM_HAVE_LIBCXX_HARDENING}"     )
-message(STATUS "NVHM_HAVE_CACHE_LINE_SIZE       = ${NVHM_HAVE_CACHE_LINE_SIZE}"      )
-message(STATUS "NVHM_HAVE_PAGE_SIZE             = ${NVHM_HAVE_PAGE_SIZE}"            )
-message(STATUS "NVHM_HAVE_HUGEPAGE_SIZE         = ${NVHM_HAVE_HUGEPAGE_SIZE}"        )
-message(STATUS "NVHM_HAVE_NUM_HUGEPAGES         = ${NVHM_HAVE_NUM_HUGEPAGES}"        )
-message(STATUS "NVHM_HAVE_TRANSPARENT_HUGEPAGES = ${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
+message(STATUS "NVHM_HAVE_MADVISE_HUGEPAGE      = ${NVHM_HAVE_MADVISE_HUGEPAGE}"     )
+message(STATUS "NVHM_HAVE_MMAP_HUGETLB          = ${NVHM_HAVE_MMAP_HUGETLB}"         )
 message(STATUS "NVHM_HAVE_SSE                   = ${NVHM_HAVE_SSE}"                  )
 message(STATUS "NVHM_HAVE_SSE2                  = ${NVHM_HAVE_SSE2}"                 )
 message(STATUS "NVHM_HAVE_SSSE3                 = ${NVHM_HAVE_SSSE3}"                )
@@ -306,34 +385,18 @@ message(STATUS "NVHM_HAVE_SVE                   = ${NVHM_HAVE_SVE}"             
 message(STATUS "NVHM_HAVE_SVE_SIZE              = ${NVHM_HAVE_SVE_SIZE}"             )
 message(STATUS "NVHM_HAVE_SVE2                  = ${NVHM_HAVE_SVE2}"                 )
 
-option(NVHM_WANT_ALL "Enable all features" OFF)
-if(${NVHM_WANT_ALL})
-  set(NVHM_HAVE_TRANSPARENT_HUGEPAGES ON)
-  set(NVHM_HAVE_SSE ON)
-  set(NVHM_HAVE_SSE2 ON)
-  set(NVHM_HAVE_SSSE3 ON)
-  set(NVHM_HAVE_SSE4_1 ON)
-  set(NVHM_HAVE_AVX2 ON)
-  set(NVHM_HAVE_AVX512_F ON)
-  set(NVHM_HAVE_AVX512_BW ON)
-  set(NVHM_HAVE_AVX512_VL ON)
-  set(NVHM_HAVE_AVX512_VBMI ON)
-  set(NVHM_HAVE_NEON ON)
-  set(NVHM_HAVE_SVE ON)
-  set(NVHM_HAVE_SVE2 ON)
-endif()
-
 set(NVHM_WANT_CACHE_LINE_SIZE "${NVHM_HAVE_CACHE_LINE_SIZE}" CACHE STRING "Cache line size")
 set(NVHM_WANT_PAGE_SIZE "${NVHM_HAVE_PAGE_SIZE}" CACHE STRING "Page size")
 set(NVHM_WANT_HUGEPAGE_SIZE "${NVHM_HAVE_HUGEPAGE_SIZE}" CACHE STRING "Desired hugepage size")
 
-option(NVHM_WANT_PAGE_ALIGNMENT "Enable using page aligned allocations by default" ON)
-if((${NVHM_HAVE_NUM_HUGEPAGES} GREATER 0) OR (${NVHM_HAVE_TRANSPARENT_HUGEPAGES}))
-  option(NVHM_WANT_HUGEPAGES "Enable using hugepages by default" ON )
-else()
-  option(NVHM_WANT_HUGEPAGES "Enable using hugepages by default" OFF)
-endif()
+option(NVHM_WANT_PAGE_ALIGN "Enable using page aligned allocations by default" ON)
 option(NVHM_WANT_TRANSPARENT_HUGEPAGES "Prefer using transparent hugepages" "${NVHM_HAVE_TRANSPARENT_HUGEPAGES}")
+if(((${NVHM_HAVE_NUM_HUGEPAGES} GREATER 0) AND (${NVHM_HAVE_MMAP_HUGETLB})) OR
+   ((${NVHM_WANT_TRANSPARENT_HUGEPAGES}) AND (${NVHM_HAVE_MADVISE_HUGEPAGE})))
+  option(NVHM_WANT_HUGEPAGE_ALIGN "Enable using hugepages by default" ON )
+else()
+  option(NVHM_WANT_HUGEPAGE_ALIGN "Enable using hugepages by default" OFF)
+endif()
 
 if((${NVHM_HAVE_SSE}) OR (${NVHM_HAVE_SSE2}) OR (${NVHM_HAVE_SSSE3}) OR (${NVHM_HAVE_SSE4_1}))
   option(NVHM_WANT_SSE          "Enable SSE"          ON )
@@ -364,9 +427,9 @@ endif()
 option(NVHM_WANT_AVX          "Enable AVX"          ${NVHM_HAVE_AVX})
 
 if((${NVHM_HAVE_AVX}) AND (${NVHM_HAVE_AVX2}))
-option(NVHM_WANT_AVX2         "Enable AVX2"           ON )
+  option(NVHM_WANT_AVX2         "Enable AVX2"         ON )
 else()
-option(NVHM_WANT_AVX2         "Enable AVX2"           OFF)
+  option(NVHM_WANT_AVX2         "Enable AVX2"         OFF)
 endif()
 
 if((${NVHM_HAVE_AVX512_F}) AND (${NVHM_HAVE_AVX512_BW}))
@@ -414,9 +477,9 @@ option(NVHM_WANT_RANGE_PREFETCH "Use scoped SVE prefetches (experimental feature
 
 message(STATUS "NVHM_WANT_CACHE_LINE_SIZE       = ${NVHM_WANT_CACHE_LINE_SIZE}"      )
 message(STATUS "NVHM_WANT_PAGE_SIZE             = ${NVHM_WANT_PAGE_SIZE}"            )
-message(STATUS "NVHM_WANT_PAGE_ALIGNMENT        = ${NVHM_WANT_PAGE_ALIGNMENT}"       )
+message(STATUS "NVHM_WANT_PAGE_ALIGN            = ${NVHM_WANT_PAGE_ALIGN}"           )
 message(STATUS "NVHM_WANT_HUGEPAGE_SIZE         = ${NVHM_WANT_HUGEPAGE_SIZE}"        )
-message(STATUS "NVHM_WANT_HUGEPAGES             = ${NVHM_WANT_HUGEPAGES}"            )
+message(STATUS "NVHM_WANT_HUGEPAGE_ALIGN        = ${NVHM_WANT_HUGEPAGE_ALIGN}"       )
 message(STATUS "NVHM_WANT_TRANSPARENT_HUGEPAGES = ${NVHM_WANT_TRANSPARENT_HUGEPAGES}")
 message(STATUS "NVHM_WANT_SSE                   = ${NVHM_WANT_SSE}"                  )
 message(STATUS "NVHM_WANT_SSE_PREFETCH          = ${NVHM_WANT_SSE_PREFETCH}"         )
@@ -546,8 +609,6 @@ elseif("${NVHM_TARGET}" STREQUAL "aarch64")
   endif()
 endif()
 
-option(NVHM_ALLOW_FAST_LRU_RESCALE "Allow using faster, but numerically incosistent rescale methods" ON)
-
 # Write configuration header file.
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/include/nvhashmap_conf.hpp" CONTENT
@@ -608,7 +669,7 @@ constexpr static int_t page_size{${NVHM_WANT_PAGE_SIZE}};
 static_assert(has_single_bit(page_size));
 static_assert(page_size >= cache_line_size);
 
-constexpr static bool page_align_by_default{$<BOOL:${NVHM_WANT_PAGE_ALIGNMENT}>};
+constexpr static bool page_align_by_default{$<BOOL:${NVHM_WANT_PAGE_ALIGN}>};
 
 /**
  * Hugepage size.
@@ -620,17 +681,12 @@ static_assert(hugepage_size >= page_size);
 /**
  * Enable hugepage allocation.
  */
-constexpr static bool use_hugepages_by_default{$<BOOL:${NVHM_WANT_HUGEPAGES}>};
+constexpr static bool use_hugepages_by_default{$<BOOL:${NVHM_WANT_HUGEPAGE_ALIGN}>};
 
 /**
  * Allow using transparent hugepages.
  */
-constexpr static bool prefer_transparent_hugepages{$<BOOL:${NVHM_WANT_TRANSPARENT_HUGEPAGES}>};
-
-/**
- * Allow LRU rescales to happen faster (but results might be not comparable between kernels).
- */
-constexpr static bool allow_fast_lru_rescale{$<BOOL:${NVHM_ALLOW_FAST_LRU_RESCALE}>};
+constexpr static bool prefer_madvice_hugepages{$<BOOL:${NVHM_WANT_TRANSPARENT_HUGEPAGES}> || ($<BOOL:${NVHM_HAVE_NUM_HUGEPAGES}> == 0)};
 
 /**
  * Prefetch locality.

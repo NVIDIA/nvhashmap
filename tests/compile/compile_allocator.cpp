@@ -19,4 +19,14 @@
 
 using namespace nvhm;
 
-int main() { return 0; }
+int main() {
+  make_shared<float, madv_allocator<>>();
+  make_shared<float, madv_allocator<>>(1337);
+  make_shared<float, mmap_allocator<>>();
+  make_shared<float, mmap_allocator<>>(1337);
+  make_unique<float, madv_allocator<>>();
+  make_unique<float, madv_allocator<>>(1337);
+  make_unique<float, mmap_allocator<>>();
+  make_unique<float, mmap_allocator<>>(1337);
+  return 0;
+}

@@ -1175,7 +1175,7 @@ int main(int argc, char* argv[]) {
       << std::left << std::setw(6) << "" << " | "
       << std::right << std::setw(4) << "" << " | " << std::setw(5) << "" << " | " << std::setw(4) << "";
     for (int_t i{}; i < std::max(num_insert_trials, num_find_trials); ++i) {
-      std::cout << " | " << std::setw(5) << to_string('#', i);
+      std::cout << " | " << std::setw(5) << render_args_to_string('#', i);
     }
     std::cout
       << " | " << std::setw(10) << "" << " | " << std::setw(10) << "" << " | " << std::setw(12) << ""
