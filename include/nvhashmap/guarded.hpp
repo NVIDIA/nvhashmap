@@ -316,8 +316,8 @@ class guarded : public container<guarded<Inner>> {
   inline guarded& operator=(const guarded& other) {
     if (&other == this) return *self();
 
-    write_lock_type lock{mutex_, std::defer_lock};
-    read_lock_type other_lock{other.mutex_, std::defer_lock};
+    write_lock_type lock{defer_lock_()};
+    read_lock_type other_lock{other.defer_lock_()};
     std::lock(lock, other_lock);
 
     inner_ = other.inner_;
@@ -331,8 +331,8 @@ class guarded : public container<guarded<Inner>> {
   inline guarded& operator=(guarded&& other) {
     if (&other == this) return *self();
 
-    write_lock_type lock{mutex_, std::defer_lock};
-    write_lock_type other_lock{other.mutex_, std::defer_lock};
+    write_lock_type lock{defer_lock_()};
+    write_lock_type other_lock{other.defer_lock_()};
     std::lock(lock, other_lock);
 
     inner_ = std::move(other.inner_);
@@ -447,15 +447,10 @@ class guarded : public container<guarded<Inner>> {
   template <typename Pred>
   constexpr int_t count_if(const Pred& pred) const {
     static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos_type&) -> bool");
 
     read_lock_type lock{lock_()};
     return inner_.count_if([&](inner_read_pos_type&& pos) {
-      read_pos_type r_lock{std::move(pos), std::move(lock)};
-      bool res{pred(r_lock)};
-      pos = std::move(r_lock.inner_);
-      lock = std::move(r_lock.lock_);
-      return res;
+      return pred(read_pos_type{std::move(pos), defer_lock_()});
     });
   }
   constexpr void count_kernel_populations(std::array<int_t, kernel_size + 1>& counts) const {
@@ -499,16 +494,16 @@ class guarded : public container<guarded<Inner>> {
     return {b, write_pos_type{std::move(p), std::move(lock)}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& prev_pos, PS&& seq, const key_type& key) {
-    NVHM_ASSUME_(prev_pos.mutex_() == &mutex_);
-    auto [b, p, s]{inner_.erase_next(std::move(prev_pos.inner_), std::forward<PS>(seq), key)};
-    return {b, write_pos_type{std::move(p), std::move(prev_pos.lock_)}, std::move(s)};
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
+    NVHM_ASSUME_(pos.mutex_() == &mutex_);
+    auto [b, p, s]{inner_.erase_next(std::move(pos.inner_), std::forward<PS>(seq), key)};
+    return {b, write_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& prev_pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
-    NVHM_ASSUME_(prev_pos.mutex_() == &mutex_);
-    auto [b, p, s]{inner_.erase_next(std::move(prev_pos.inner_), std::forward<PS>(seq), key, hint.inner())};
-    return {b, write_pos_type{std::move(p), std::move(prev_pos.lock_)}, std::move(s)};
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+    NVHM_ASSUME_(pos.mutex_() == &mutex_);
+    auto [b, p, s]{inner_.erase_next(std::move(pos.inner_), std::forward<PS>(seq), key, hint.inner())};
+    return {b, write_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   constexpr std::pair<bool, write_pos_type> erase_at(write_pos_type&& pos) {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
@@ -517,16 +512,11 @@ class guarded : public container<guarded<Inner>> {
   }
   template <typename Pred>
   constexpr int_t erase_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(write_pos_type) -> bool");
 
     write_lock_type lock{lock_()};
     return inner_.erase_if([&](inner_write_pos_type&& pos) {
-      write_pos_type w_lock{std::move(pos), std::move(lock)};
-      bool res{pred(w_lock)};
-      pos = std::move(w_lock.inner_);
-      lock = std::move(w_lock.lock_);
-      return res;
+      return pred(write_pos_type{std::move(pos), write_lock_type{mutex_, std::defer_lock}});
     });
   }
   constexpr int_t erase_all(const key_type& key) {
@@ -558,7 +548,7 @@ class guarded : public container<guarded<Inner>> {
   constexpr std::pair<read_pos_type, probe_seq_type> find_next(read_pos_type&& pos, PS&& seq, const key_type& key) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
 
-    auto [p, s]{inner_.find_next(pos.inner_, std::forward<PS>(seq), key)};
+    auto [p, s]{inner_.find_next(std::move(pos.inner_), std::forward<PS>(seq), key)};
     return {read_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   template <typename PS>
@@ -569,7 +559,7 @@ class guarded : public container<guarded<Inner>> {
   constexpr std::pair<read_pos_type, probe_seq_type> find_next(read_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
     NVHM_ASSUME_(pos.mutex_() == &mutex_);
 
-    auto [p, s]{inner_.find_next(pos.inner_, std::forward<PS>(seq), key, hint.inner())};
+    auto [p, s]{inner_.find_next(std::move(pos.inner_), std::forward<PS>(seq), key, hint.inner())};
     return {read_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   template <typename PS>
@@ -579,48 +569,29 @@ class guarded : public container<guarded<Inner>> {
   template <typename Pred>
   constexpr read_pos_type find_if(const Pred& pred) const {
     static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos_type&) -> bool");
 
     read_lock_type lock{lock_()};
     inner_read_pos_type pos{inner_.find_if([&](inner_read_pos_type&& pos) {
-      read_pos_type r_lock{std::move(pos), std::move(lock)};
-      bool res{pred(r_lock)};
-      pos = std::move(r_lock.inner_);
-      lock = std::move(r_lock.lock_);
-      return res;
+      return pred(read_pos_type{std::move(pos), defer_lock_()});
     })};
     return read_pos_type{std::move(pos), std::move(lock)};
   }
   constexpr std::vector<read_pos_type> find_all(const key_type& key) const {
-    read_lock_type lock{lock_()};
-
-    // This is kind of hack. Since we cannot RAII share a write lock without using a `shared_ptr`.
-    // Sure, we could use a `shared_ptr`, but that would add a lot of overhead that only makes
-    // sense if you really really need these write_positions to be usable.
-    //
-    // So for now, unless I get a request to change this, we'll keep it like this.
     std::vector<read_pos_type> res;
+    read_lock_type lock{lock_()};
     inner_.for_each(key, [&](inner_read_pos_type&& pos, const probe_seq_type&) {
-      res.emplace_back(std::move(pos), std::move(lock));
-      lock = std::move(res.back().lock_);
+      res.emplace_back(std::move(pos), lock_());
     });
-    if (!res.empty()) {
-      res.back().lock_ = std::move(lock);
-    }
     return res;
   }
 
   template <typename Func>
   constexpr void for_each(const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos_type>, "`func` must be `func(const read_pos_type&)`!");
-    static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const read_pos_type&)`!");
+    static_assert(std::is_invocable_v<Func, read_pos_type>, "`func` must be `func(read_pos_type)`!");
 
     read_lock_type lock{lock_()};
     inner_.for_each([&](inner_read_pos_type&& pos) {
-      read_pos_type r_lock{std::move(pos), std::move(lock)};
-      func(r_lock);
-      pos = std::move(r_lock.inner_);
-      lock = std::move(r_lock.lock_);
+      func(read_pos_type{std::move(pos), defer_lock_()});
     });
   }
   template <typename Func>
@@ -628,17 +599,12 @@ class guarded : public container<guarded<Inner>> {
     if constexpr (std::is_invocable_v<Func, read_pos_type>) {
       cself()->for_each(func);
     } else if constexpr (std::is_invocable_v<Func, write_pos_type>) {
-      static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const write_pos_type&)`!");
-
       write_lock_type lock{lock_()};
       inner_.for_each([&](inner_write_pos_type&& pos) {
-        write_pos_type w_lock{std::move(pos), std::move(lock)};
-        func(w_lock);
-        pos = std::move(w_lock.inner_);
-        lock = std::move(w_lock.lock_);
+        func(write_pos_type{std::move(pos), defer_lock_()});
       });
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be `func(const read_pos_type&)` or `func(const write_pos_type&)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type)` or `func(write_pos_type)`!");
     }
   }
   template <typename Func>
@@ -689,15 +655,11 @@ class guarded : public container<guarded<Inner>> {
 
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos_type, probe_seq_type>, "`func` must be `func(const read_pos_type&, probe_seq_type)`!");
-    static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const read_pos_type&, probe_seq_type)`!");
+    static_assert(std::is_invocable_v<Func, read_pos_type, probe_seq_type>, "`func` must be `func(read_pos_type, probe_seq_type)`!");
 
     read_lock_type lock{lock_()};
     inner_.for_each(key, [&](inner_read_pos_type&& pos, const probe_seq_type& seq) {
-      read_pos_type r_lock{std::move(pos), std::move(lock)};
-      func(r_lock, seq);
-      pos = std::move(r_lock.inner_);
-      lock = std::move(r_lock.lock_);
+      func(read_pos_type{std::move(pos), defer_lock_()}, seq);
     });
   }
   template <typename Func>
@@ -705,17 +667,12 @@ class guarded : public container<guarded<Inner>> {
     if constexpr (std::is_invocable_v<Func, read_pos_type, probe_seq_type>) {
       cself()->for_each(key, func);
     } else if constexpr (std::is_invocable_v<Func, write_pos_type, probe_seq_type>) {
-      static_assert(arg_type_v<arg_n_t<Func, 0>> == arg_type_t::const_lvalue_ref, "`func` must be `func(const write_pos_type&, probe_seq_type)`!");
-
       write_lock_type lock{lock_()};
       inner_.for_each(key, [&](inner_write_pos_type&& pos, const probe_seq_type& seq) {
-        write_pos_type w_lock{std::move(pos), std::move(lock)};
-        func(w_lock, seq);
-        pos = std::move(w_lock.inner_);
-        lock = std::move(w_lock.lock_);
+        func(write_pos_type{std::move(pos), defer_lock_()}, seq);
       });
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type, probe_seq_type)` or `func(const write_pos_type&, probe_seq_type)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type, probe_seq_type)` or `func(write_pos_type, probe_seq_type)`!");
     }
   }
 
@@ -936,44 +893,37 @@ class guarded : public container<guarded<Inner>> {
     return {write_pos_type{std::move(p), std::move(lock)}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& prev_pos, PS&& seq, const key_type& key) {
-    NVHM_ASSUME_(prev_pos.mutex_() == &mutex_);
-    auto [p, s]{inner_.update_next(std::move(prev_pos.inner_), std::forward<PS>(seq), key)};
-    return {write_pos_type{std::move(p), std::move(prev_pos.lock_)}, std::move(s)};
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
+    NVHM_ASSUME_(pos.mutex_() == &mutex_);
+    auto [p, s]{inner_.update_next(std::move(pos.inner_), std::forward<PS>(seq), key)};
+    return {write_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& prev_pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
-    NVHM_ASSUME_(prev_pos.mutex_() == &mutex_);
-    auto [p, s]{inner_.update_next(std::move(prev_pos.inner_), std::forward<PS>(seq), key, hint.inner())};
-    return {write_pos_type{std::move(p), std::move(prev_pos.lock_)}, std::move(s)};
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+    NVHM_ASSUME_(pos.mutex_() == &mutex_);
+    auto [p, s]{inner_.update_next(std::move(pos.inner_), std::forward<PS>(seq), key, hint.inner())};
+    return {write_pos_type{std::move(p), std::move(pos.lock_)}, std::move(s)};
   }
   template <typename Pred>
   constexpr write_pos_type update_if(const Pred& pred) {
     static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
 
     write_lock_type lock{lock_()};
     inner_write_pos_type pos{inner_.update_if([&](inner_write_pos_type&& pos) {
-      write_pos_type w_lock{std::move(pos), std::move(lock)};
-      bool res{pred(w_lock)};
-      pos = std::move(w_lock.inner_);
-      lock = std::move(w_lock.lock_);
-      return res;
+      return pred(write_pos_type{std::move(pos), defer_lock_()});
     })};
     return write_pos_type{std::move(pos), std::move(lock)};
   }
   constexpr std::vector<write_pos_type> update_all(const key_type& key) {
-    write_lock_type lock{lock_()};
-
-    // This is kind of hack. Since we cannot RAII share a write lock without using a `shared_ptr`.
-    // Sure, we could use a `shared_ptr`, but that would add a lot of overhead that only makes
-    // sense if you really really need these write_positions to be usable.
+    // This is kind of hack. Since we cannot RAII share a write lock. Sure, we could use a
+    // `shared_ptr`, but that would add a lot of overhead that only makes sense if you really need
+    // these write_positions to be usable.
     //
     // So for now, unless I get a request to change this, we'll keep it like this.
     std::vector<write_pos_type> res;
+    write_lock_type lock{lock_()};
     inner_.for_each(key, [&](inner_write_pos_type&& pos, const probe_seq_type&) {
-      res.emplace_back(std::move(pos), std::move(lock));
-      lock = std::move(res.back().lock_);
+      res.emplace_back(std::move(pos), defer_lock_());
     });
     if (!res.empty()) {
       res.back().lock_ = std::move(lock);
@@ -1018,8 +968,8 @@ class guarded : public container<guarded<Inner>> {
   constexpr friend bool operator==(const guarded& lhs, const guarded& rhs) {
     if (&lhs == &rhs) return true;
 
-    read_lock_type lhs_lock{lhs.mutex_, std::defer_lock};
-    read_lock_type rhs_lock{rhs.mutex_, std::defer_lock};
+    read_lock_type lhs_lock{lhs.defer_lock_()};
+    read_lock_type rhs_lock{rhs.defer_lock_()};
     std::lock(lhs_lock, rhs_lock);
 
     return lhs.inner_ == rhs.inner_;
@@ -1029,8 +979,8 @@ class guarded : public container<guarded<Inner>> {
   constexpr friend void swap(guarded& lhs, guarded& rhs) {
     if (&lhs == &rhs) return;
 
-    write_lock_type lhs_lock{lhs.mutex_, std::defer_lock};
-    write_lock_type rhs_lock{rhs.mutex_, std::defer_lock};
+    write_lock_type lhs_lock{lhs.defer_lock_()};
+    write_lock_type rhs_lock{rhs.defer_lock_()};
     std::lock(lhs_lock, rhs_lock);
 
     swap(lhs.inner_, rhs.inner_);
@@ -1042,7 +992,9 @@ class guarded : public container<guarded<Inner>> {
 
   inline read_lock_type lock_() const { return read_lock_type{mutex_}; }
   inline write_lock_type lock_() { return write_lock_type{mutex_}; }
-  inline read_lock_type clock_() const { return read_lock_type{mutex_}; }
+
+  inline read_lock_type defer_lock_() const { return read_lock_type{mutex_, std::defer_lock}; }
+  inline write_lock_type defer_lock_() { return write_lock_type{mutex_, std::defer_lock}; }
 };
 
 }  // namespace nvhm

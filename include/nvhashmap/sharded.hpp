@@ -510,8 +510,7 @@ class sharded : public container<sharded<Shard>> {
   }
   template <typename Pred>
   constexpr int_t erase_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(write_pos_type) -> bool");
 
     int_t n{};
     for_each_shard_([&](shard_type& shard, shard_idx_t i) {
@@ -562,7 +561,6 @@ class sharded : public container<sharded<Shard>> {
   template <typename Pred>
   constexpr read_pos_type find_if(const Pred& pred) const {
     static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos_type&) -> bool");
 
     const shard_idx_t end{num_shards()};
 
@@ -578,9 +576,9 @@ class sharded : public container<sharded<Shard>> {
     const auto [shard, i]{to_shard(key)};
 
     std::vector<read_pos_type> res;
-    shard.for_each(key, [&](shard_read_pos_type&& pos, const probe_seq_type&) {
+    for (auto&& pos : shard.find_all(key)) {
       res.emplace_back(std::move(pos), i);
-    });
+    }
     return res;
   }
 
@@ -995,7 +993,6 @@ class sharded : public container<sharded<Shard>> {
   template <typename Pred>
   constexpr write_pos_type update_if(const Pred& pred) {
     static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
 
     const shard_idx_t end{num_shards()};
 
@@ -1011,9 +1008,9 @@ class sharded : public container<sharded<Shard>> {
     auto [shard, i]{to_shard(key)};
 
     std::vector<write_pos_type> res;
-    shard.for_each(key, [&](shard_write_pos_type&& pos, const probe_seq_type&) {
+    for (auto&& pos : shard.update_all(key)) {
       res.emplace_back(std::move(pos), i);
-    });
+    }
     return res;
   }
 

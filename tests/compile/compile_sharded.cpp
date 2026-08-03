@@ -25,5 +25,5 @@ using namespace nvhm;
 
 int main() {
   using sharded_t = sharded<map<dummy_key, dummy_value, flags_t::all>>;
-  return compile_map<false, sharded_t>(3);
+  return compile_map<true, sharded_t>(3);
 }

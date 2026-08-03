@@ -86,4 +86,3 @@ jobs:
           ./build/tests/test_probe_seq
           ./build/tests/test_maps
           ./build/tests/test_mutex
-          
