@@ -35,8 +35,8 @@ class std_map_shim {
   using size_type = std::size_t;
   using difference_type = std::ptrdiff_t;
 
-  using inner_read_pos_type = typename inner_type::read_pos;
-  using inner_write_pos_type = typename inner_type::write_pos;
+  using inner_read_pos_type = typename inner_type::read_pos_type;
+  using inner_write_pos_type = typename inner_type::write_pos_type;
   using inner_const_iterator_type = typename inner_type::const_iterator;
   using inner_iterator_type = typename inner_type::iterator;
 

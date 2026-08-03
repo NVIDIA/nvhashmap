@@ -67,7 +67,7 @@ namespace nvhm {
   constexpr std::vector<std::pair<key_type, value_type>> keys_and_values() const {            \
     std::vector<std::pair<key_type, value_type>> res;                                         \
     res.reserve(to_uint(self()->size()));                                                     \
-    self()->for_each([&](read_pos&& pos) {                                                    \
+    self()->for_each([&](read_pos_type&& pos) {                                               \
       res.emplace_back(self()->key_at(pos), self()->value_at(pos));                           \
     });                                                                                       \
     return res;                                                                               \

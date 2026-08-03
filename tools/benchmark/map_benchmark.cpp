@@ -142,7 +142,7 @@ int_t blob_size{120};
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob) {
   using map_t = Map;
-  using write_pos_t = typename map_t::write_pos;
+  using write_pos_t = typename map_t::write_pos_type;
 
   write_pos_t pos{[&](){
     if constexpr (std::is_same_v<PrefetchHint, std::monostate>) {
@@ -256,7 +256,7 @@ bool check_blobs{false};
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restrict map, int_t i, const Key& __restrict k, PrefetchHint&& h, bool should_exist) {
   using map_t = Map;
-  using read_pos_t = typename map_t::read_pos;
+  using read_pos_t = typename map_t::read_pos_type;
   
   read_pos_t pos{[&](){
     if constexpr (std::is_same_v<PrefetchHint, std::monostate>) {

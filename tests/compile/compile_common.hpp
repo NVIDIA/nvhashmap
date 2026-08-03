@@ -58,8 +58,8 @@ int compile_map(Args&&... args) {
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
   using value_t = typename map_t::value_type;
-  using write_pos_t = typename map_t::write_pos;
-  using read_pos_t = typename map_t::read_pos;
+  using write_pos_t = typename map_t::write_pos_type;
+  using read_pos_t = typename map_t::read_pos_type;
   using prefetch_hint_t = typename map_t::prefetch_hint;
   using const_iterator_t = typename map_t::const_iterator;
   using iterator_t = typename map_t::iterator;

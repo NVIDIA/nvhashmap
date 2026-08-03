@@ -155,13 +155,13 @@ class sharded : public container<sharded<Shard>> {
   using probe_seq_type = typename shard_type::probe_seq_type;
   using allocator_type = typename shard_type::allocator_type;
 
-  using shard_read_pos_type = typename shard_type::read_pos;
-  using shard_write_pos_type = typename shard_type::write_pos;
+  using shard_read_pos_type = typename shard_type::read_pos_type;
+  using shard_write_pos_type = typename shard_type::write_pos_type;
 
   template <typename InnerPos>
-  using pos = sharded_pos<InnerPos>;
-  using read_pos = sharded_read_pos<shard_read_pos_type>;
-  using write_pos = sharded_write_pos<shard_write_pos_type>;
+  using pos_type = sharded_pos<InnerPos>;
+  using read_pos_type = sharded_read_pos<shard_read_pos_type>;
+  using write_pos_type = sharded_write_pos<shard_write_pos_type>;
 
   using shard_const_iterator_type = typename shard_type::const_iterator;
   using shard_iterator_type = typename shard_type::iterator;
@@ -354,10 +354,10 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr const_entry_type at(const pos<InnerPos>& pos) const {
+  constexpr const_entry_type at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.at(pos.inner_);
   }
-  constexpr entry_type at(const write_pos& pos) {
+  constexpr entry_type at(const write_pos_type& pos) {
     return to_shard(pos).first.at(pos.inner_);
   }
 
@@ -383,23 +383,23 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr const blob_t* blob_at(const pos<InnerPos>& pos) const {
+  constexpr const blob_t* blob_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.blob_at(pos.inner_);
   }
-  constexpr blob_t* blob_at(const write_pos& pos) {
+  constexpr blob_t* blob_at(const write_pos_type& pos) {
     return to_shard(pos).first.blob_at(pos.inner_);
   }
 
   template <typename InnerPos>
-  constexpr int_t bucket_size_at(const pos<InnerPos>& pos) const {
+  constexpr int_t bucket_size_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_size_at(pos.inner_);
   }
   template <typename InnerPos>
-  constexpr int_t bucket_num_empty_slots_at(const pos<InnerPos>& pos) const {
+  constexpr int_t bucket_num_empty_slots_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_num_empty_slots_at(pos.inner_);
   }
   template <typename InnerPos>
-  constexpr int_t bucket_num_tombstone_slots_at(const pos<InnerPos>& pos) const {
+  constexpr int_t bucket_num_tombstone_slots_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.bucket_num_tombstone_slots_at(pos.inner_);
   }
 
@@ -447,19 +447,19 @@ class sharded : public container<sharded<Shard>> {
     return to_shard(key, hint).first.contains(key, hint.inner());
   }
   template <typename InnerPos>
-  constexpr bool contains_at(const pos<InnerPos>& pos) const {
+  constexpr bool contains_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.contains_at(pos.inner_);
   }
 
   constexpr int_t count(const key_type& key) const { return to_shard(key).first.count(key); }
   template <typename Pred>
   constexpr int_t count_if(const Pred& pred) const {
-    static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
+    static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
 
     int_t n{};
     for_each_shard_([&](const shard_type& shard, shard_idx_t i) {
       n += shard.count_if([&](shard_read_pos_type&& pos) {
-        return pred(read_pos{std::move(pos), i});
+        return pred(read_pos_type{std::move(pos), i});
       });
     });
     return n;
@@ -482,102 +482,102 @@ class sharded : public container<sharded<Shard>> {
   constexpr bool erase(const key_type& key, const prefetch_hint& hint) {
     return to_shard(key, hint).first.erase(key, hint.inner());
   }
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_first(const key_type& key) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_first(const key_type& key) {
     auto [shard, i]{to_shard(key)};
     auto [b, p, s]{shard.erase_first(key)};
-    return {b, write_pos{std::move(p), i}, std::move(s)};
+    return {b, write_pos_type{std::move(p), i}, std::move(s)};
   }
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_first(const key_type& key, const prefetch_hint& hint) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_first(const key_type& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
     auto [b, p, s]{shard.erase_first(key, hint.inner())};
-    return {b, write_pos{std::move(p), i}, std::move(s)};
+    return {b, write_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_next(write_pos&& pos, PS&& seq, const key_type& key) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
     auto [shard, i]{to_shard(pos, key)};
     auto [b, p, s]{shard.erase_next(std::move(pos.inner_), std::forward<PS>(seq), key)};
-    return {b, write_pos{std::move(p), i}, std::move(s)};
+    return {b, write_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_next(write_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(pos, key, hint)};
     auto [b, p, s]{shard.erase_next(std::move(pos.inner_), std::forward<PS>(seq), key, hint.inner())};
-    return {b, write_pos{std::move(p), i}, std::move(s)};
+    return {b, write_pos_type{std::move(p), i}, std::move(s)};
   }
-  constexpr std::pair<bool, write_pos> erase_at(write_pos&& pos) {
+  constexpr std::pair<bool, write_pos_type> erase_at(write_pos_type&& pos) {
     auto [b, p]{to_shard(pos).first.erase_at(std::move(pos.inner_))};
-    return {b, write_pos{std::move(p), pos.shard_idx_}};
+    return {b, write_pos_type{std::move(p), pos.shard_idx_}};
   }
   template <typename Pred>
   constexpr int_t erase_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos>, "`pred` must be pred(const write_pos&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos&) -> bool");
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
+    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
 
     int_t n{};
     for_each_shard_([&](shard_type& shard, shard_idx_t i) {
       n += shard.erase_if([&](shard_write_pos_type&& pos) {
-        return pred(write_pos{std::move(pos), i});
+        return pred(write_pos_type{std::move(pos), i});
       });
     });
     return n;
   }
   constexpr int_t erase_all(const key_type& key) { return to_shard(key).first.erase_all(key); }
 
-  constexpr read_pos find(const key_type& key) const {
+  constexpr read_pos_type find(const key_type& key) const {
     auto [shard, i]{to_shard(key)};
 
-    return read_pos{shard.find(key), i};
+    return read_pos_type{shard.find(key), i};
   }
-  constexpr read_pos find(const key_type& key, const prefetch_hint& hint) const {
+  constexpr read_pos_type find(const key_type& key, const prefetch_hint& hint) const {
     auto [shard, i]{to_shard(key, hint)};
 
-    return read_pos{shard.find(key, hint.inner()), i};
+    return read_pos_type{shard.find(key, hint.inner()), i};
   }
-  constexpr std::pair<read_pos, probe_seq_type> find_first(const key_type& key) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_first(const key_type& key) const {
     auto [shard, i]{to_shard(key)};
 
     auto [p, s]{shard.find_first(key)};
-    return {read_pos{std::move(p), i}, std::move(s)};
+    return {read_pos_type{std::move(p), i}, std::move(s)};
   }
-  constexpr std::pair<read_pos, probe_seq_type> find_first(const key_type& key, const prefetch_hint& hint) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_first(const key_type& key, const prefetch_hint& hint) const {
     auto [shard, i]{to_shard(key, hint)};
 
     auto [p, s]{shard.find_first(key, hint.inner())};
-    return {read_pos{std::move(p), i}, std::move(s)};
+    return {read_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename InnerPos, typename PS>
-  constexpr std::pair<read_pos, probe_seq_type> find_next(const pos<InnerPos>& pos, PS&& seq, const key_type& key) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_next(const pos_type<InnerPos>& pos, PS&& seq, const key_type& key) const {
     auto [shard, i]{to_shard(pos, key)};
 
     auto [p, s]{shard.find_next(pos.inner_, std::forward<PS>(seq), key)};
-    return {read_pos{std::move(p), i}, std::move(s)};
+    return {read_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename InnerPos, typename PS>
-  constexpr std::pair<read_pos, probe_seq_type> find_next(const pos<InnerPos>& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_next(const pos_type<InnerPos>& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
     auto [shard, i]{to_shard(pos, key, hint)};
 
     auto [p, s]{shard.find_next(pos.inner_, std::forward<PS>(seq), key, hint.inner())};
-    return {read_pos{std::move(p), i}, std::move(s)};
+    return {read_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename Pred>
-  constexpr read_pos find_if(const Pred& pred) const {
-    static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos&) -> bool");
+  constexpr read_pos_type find_if(const Pred& pred) const {
+    static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
+    static_assert(arg_type_v<arg_n_t<Pred, 0>> != arg_type_t::lvalue_ref, "`pred` cannot be pred(read_pos_type&) -> bool");
 
     const shard_idx_t end{num_shards()};
 
     for (shard_idx_t i{}; i < end; ++i) {
       shard_read_pos_type pos{shards_[to_uint(i)].find_if([&](shard_read_pos_type&& pos) {
-        return pred(read_pos{std::move(pos), i});
+        return pred(read_pos_type{std::move(pos), i});
       })};
-      if (pos != npos) return read_pos{std::move(pos), i};
+      if (pos != npos) return read_pos_type{std::move(pos), i};
     }
     return read_npos();
   }
-  constexpr std::vector<read_pos> find_all(const key_type& key) const {
+  constexpr std::vector<read_pos_type> find_all(const key_type& key) const {
     const auto [shard, i]{to_shard(key)};
 
-    std::vector<read_pos> res;
+    std::vector<read_pos_type> res;
     shard.for_each(key, [&](shard_read_pos_type&& pos, const probe_seq_type&) {
       res.emplace_back(std::move(pos), i);
     });
@@ -586,22 +586,22 @@ class sharded : public container<sharded<Shard>> {
 
   template <typename Func>
   constexpr void for_each(const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos>, "`func` must be a `func(read_pos)`!");
+    static_assert(std::is_invocable_v<Func, read_pos_type>, "`func` must be a `func(read_pos_type)`!");
 
     for_each_shard_([&](const shard_type& shard, shard_idx_t i) {
-      shard.for_each([&](shard_read_pos_type&& pos) { func(read_pos{std::move(pos), i}); });
+      shard.for_each([&](shard_read_pos_type&& pos) { func(read_pos_type{std::move(pos), i}); });
     });
   }
   template <typename Func>
   constexpr void for_each(const Func& func) {
-    if constexpr (std::is_invocable_v<Func, read_pos>) {
+    if constexpr (std::is_invocable_v<Func, read_pos_type>) {
       cself()->for_each(func);
-    } else if constexpr (std::is_invocable_v<Func, write_pos>) {
+    } else if constexpr (std::is_invocable_v<Func, write_pos_type>) {
       for_each_shard_([&](shard_type& shard, shard_idx_t i) {
-        shard.for_each([&](shard_write_pos_type&& pos) { func(write_pos{std::move(pos), i}); });
+        shard.for_each([&](shard_write_pos_type&& pos) { func(write_pos_type{std::move(pos), i}); });
       });
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be a `func(read_pos)` or `func(write_pos)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be a `func(read_pos_type)` or `func(write_pos_type)`!");
     }
   }
   template <typename Func>
@@ -661,34 +661,34 @@ class sharded : public container<sharded<Shard>> {
 
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos, probe_seq_type>, "`func` must be `func(read_pos, probe_seq_type)`!");
+    static_assert(std::is_invocable_v<Func, read_pos_type, probe_seq_type>, "`func` must be `func(read_pos_type, probe_seq_type)`!");
 
     const auto [shard, i]{to_shard(key)};
     shard.for_each(key, [&](shard_read_pos_type&& pos, const probe_seq_type& seq) {
-      func(read_pos{std::move(pos), i}, seq);
+      func(read_pos_type{std::move(pos), i}, seq);
     });
   }
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) {
     const auto [shard, i]{to_shard(key)};
 
-    if constexpr (std::is_invocable_v<Func, read_pos, probe_seq_type>) {
+    if constexpr (std::is_invocable_v<Func, read_pos_type, probe_seq_type>) {
       cself()->for_each(key, func);
-    } else if constexpr (std::is_invocable_v<Func, write_pos, probe_seq_type>) {
+    } else if constexpr (std::is_invocable_v<Func, write_pos_type, probe_seq_type>) {
       shard.for_each(key, [&](shard_write_pos_type&& pos, const probe_seq_type& seq) {
-        func(write_pos{std::move(pos), i}, seq);
+        func(write_pos_type{std::move(pos), i}, seq);
       });
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos, probe_seq_type)` or `func(write_pos, probe_seq_type)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type, probe_seq_type)` or `func(write_pos_type, probe_seq_type)`!");
     }
   }
 
   template <typename InnerPos>
-  constexpr void get_blob_at(const pos<InnerPos>& pos, void* dst) const {
+  constexpr void get_blob_at(const pos_type<InnerPos>& pos, void* dst) const {
     to_shard(pos).first.get_blob_at(pos.inner_, dst);
   }
   template <typename InnerPos>
-  constexpr void get_blob_at(const pos<InnerPos>& pos, void* dst, int_t n) const {
+  constexpr void get_blob_at(const pos_type<InnerPos>& pos, void* dst, int_t n) const {
     to_shard(pos).first.get_blob_at(pos.inner_, dst, n);
   }
 
@@ -701,28 +701,28 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename K>
-  constexpr std::pair<write_pos, insert_op_t> insert(K&& key) {
+  constexpr std::pair<write_pos_type, insert_op_t> insert(K&& key) {
     auto [shard, i]{to_shard(key)};
     auto [p, op]{shard.insert(std::forward<K>(key))};
-    return {write_pos{std::move(p), i}, op};
+    return {write_pos_type{std::move(p), i}, op};
   }
   template <typename K>
-  constexpr std::pair<write_pos, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos_type, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
     auto [p, op]{shard.insert(std::forward<K>(key), hint.inner())};
-    return {write_pos{std::move(p), i}, op};
+    return {write_pos_type{std::move(p), i}, op};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key) {
+  constexpr std::tuple<write_pos_type, insert_op_t, probe_seq_type> insert_ex(K&& key) {
     auto [shard, i]{to_shard(key)};
     auto [p, op, s]{shard.insert_ex(std::forward<K>(key))};
-    return {write_pos{std::move(p), i}, op, std::move(s)};
+    return {write_pos_type{std::move(p), i}, op, std::move(s)};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
+  constexpr std::tuple<write_pos_type, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
     auto [p, op, s]{shard.insert_ex(std::forward<K>(key), hint.inner())};
-    return {write_pos{std::move(p), i}, op, std::move(s)};
+    return {write_pos_type{std::move(p), i}, op, std::move(s)};
   }
 
   constexpr bool is_empty() const {
@@ -739,7 +739,7 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr const key_type& key_at(const pos<InnerPos>& pos) const {
+  constexpr const key_type& key_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.key_at(pos.inner_);
   }
 
@@ -753,15 +753,15 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr lru_t lru_at(const pos<InnerPos>& pos) const {
+  constexpr lru_t lru_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.lru_at(pos.inner_);
   }
 
   template <typename InnerPos>
-  constexpr const_mapped_type mapped_at(const pos<InnerPos>& pos) const {
+  constexpr const_mapped_type mapped_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.mapped_at(pos.inner_);
   }
-  constexpr mapped_type mapped_at(const write_pos& pos) {
+  constexpr mapped_type mapped_at(const write_pos_type& pos) {
     return to_shard(pos).first.mapped_at(pos.inner_);
   }
 
@@ -790,7 +790,7 @@ class sharded : public container<sharded<Shard>> {
   }
   constexpr shard_idx_t num_shards() const noexcept { return to_int(shards_.size()); }
 
-  constexpr read_pos read_npos() const noexcept { return read_pos{shards_.back().read_npos(), num_shards() - 1}; }
+  constexpr read_pos_type read_npos() const noexcept { return read_pos_type{shards_.back().read_npos(), num_shards() - 1}; }
 
   constexpr prefetch_hint read_prefetch(const key_type& key) const {
     prefetch_hint hint{key, shard_mask_()};
@@ -801,11 +801,11 @@ class sharded : public container<sharded<Shard>> {
     to_shard(key, hint).first.read_prefetch(key, hint.inner());
   }
   template <typename InnerPos>
-  constexpr void read_prefetch_value_at(const pos<InnerPos>& pos) const {
+  constexpr void read_prefetch_value_at(const pos_type<InnerPos>& pos) const {
     to_shard(pos).first.read_prefetch_value_at(pos.inner_);
   }
   template <typename InnerPos>
-  constexpr void read_prefetch_blob_at(const pos<InnerPos>& pos) const {
+  constexpr void read_prefetch_blob_at(const pos_type<InnerPos>& pos) const {
     to_shard(pos).first.read_prefetch_blob_at(pos.inner_);
   }
 
@@ -846,15 +846,15 @@ class sharded : public container<sharded<Shard>> {
     return n;
   }
 
-  constexpr void set_blob_at(const write_pos& pos, const void* src) {
+  constexpr void set_blob_at(const write_pos_type& pos, const void* src) {
     to_shard(pos).first.set_blob_at(pos.inner_, src);
   }
-  constexpr void set_blob_at(const write_pos& pos, const void* src, int_t n) {
+  constexpr void set_blob_at(const write_pos_type& pos, const void* src, int_t n) {
     to_shard(pos).first.set_blob_at(pos.inner_, src, n);
   }
 
   template <typename V>
-  constexpr void set_value_at(const write_pos& pos, V&& value) {
+  constexpr void set_value_at(const write_pos_type& pos, V&& value) {
     to_shard(pos).first.set_value_at(pos.inner_, std::forward<V>(value));
   }
 
@@ -875,21 +875,21 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr state_t state_at(const pos<InnerPos>& pos) const {
+  constexpr state_t state_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.state_at(pos.inner_);
   }
 
   template <typename InnerPos>
-  constexpr const_iterator to_iterator(pos<InnerPos>&& pos) const {
+  constexpr const_iterator to_iterator(pos_type<InnerPos>&& pos) const {
     auto [shard, i]{to_shard(pos)};
     return {shard.to_iterator(std::move(pos.inner_)), shards_, i};
   }
-  constexpr iterator to_iterator(write_pos&& pos) {
+  constexpr iterator to_iterator(write_pos_type&& pos) {
     auto [shard, i]{to_shard(pos)};
     return {shard.to_iterator(std::move(pos.inner_)), shards_, i};
   }
   template <typename InnerPos>
-  constexpr const_iterator to_citerator(pos<InnerPos>&& pos) const { return to_iterator(std::move(pos)); }
+  constexpr const_iterator to_citerator(pos_type<InnerPos>&& pos) const { return to_iterator(std::move(pos)); }
 
   constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const key_type& key) const noexcept {
     shard_idx_t i{to_shard_idx(key)};
@@ -909,29 +909,29 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos) const {
+  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos_type<InnerPos>& pos) const {
     shard_idx_t i{to_shard_idx(pos)};
     return {shards_[to_uint(i)], i};
   }
-  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos& pos) {
+  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos_type& pos) {
     shard_idx_t i{to_shard_idx(pos)};
     return {shards_[to_uint(i)], i};
   }
   template <typename InnerPos>
-  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos, const key_type& key) const {
+  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos_type<InnerPos>& pos, const key_type& key) const {
     shard_idx_t i{to_shard_idx(pos, key)};
     return {shards_[to_uint(i)], i};
   }
-  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos& pos, const key_type& key) {
+  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos_type& pos, const key_type& key) {
     shard_idx_t i{to_shard_idx(pos, key)};
     return {shards_[to_uint(i)], i};
   }
   template <typename InnerPos>
-  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
+  constexpr std::pair<const shard_type&, shard_idx_t> to_shard(const pos_type<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
     shard_idx_t i{to_shard_idx(pos, key, hint)};
     return {shards_[to_uint(i)], i};
   }
-  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos& pos, const key_type& key, const prefetch_hint& hint) {
+  constexpr std::pair<shard_type&, shard_idx_t> to_shard(const write_pos_type& pos, const key_type& key, const prefetch_hint& hint) {
     shard_idx_t i{to_shard_idx(pos, key, hint)};
     return {shards_[to_uint(i)], i};
   }
@@ -944,73 +944,73 @@ class sharded : public container<sharded<Shard>> {
     return hint.shard_idx();
   }
   template <typename InnerPos>
-  constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos) const {
+  constexpr shard_idx_t to_shard_idx(const pos_type<InnerPos>& pos) const {
     shard_idx_t i{pos.shard_idx_};
     NVHM_ASSUME_(i >= 0 && i < num_shards(), "i = ", i, ", num_shards = ", num_shards());
     return i;
   }
   template <typename InnerPos>
-  constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos, const key_type& key) const {
+  constexpr shard_idx_t to_shard_idx(const pos_type<InnerPos>& pos, const key_type& key) const {
     shard_idx_t i{to_shard_idx(pos)};
     NVHM_ASSUME_(i == to_shard_idx(key), "i = ", i, ", to_shard_idx(key) = ", to_shard_idx(key));
     return i;
   }
   template <typename InnerPos>
-  constexpr shard_idx_t to_shard_idx(const pos<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
+  constexpr shard_idx_t to_shard_idx(const pos_type<InnerPos>& pos, const key_type& key, const prefetch_hint& hint) const {
     shard_idx_t i{to_shard_idx(pos, key)};
     NVHM_ASSUME_(i == hint.shard_idx(), "i = ", i, ", hint.shard_idx = ", hint.shard_idx());
     return i;
   }
 
-  constexpr write_pos update(const key_type& key) {
+  constexpr write_pos_type update(const key_type& key) {
     auto [shard, i]{to_shard(key)};
-    return write_pos{shard.update(key), i};
+    return write_pos_type{shard.update(key), i};
   }
-  constexpr write_pos update(const key_type& key, const prefetch_hint& hint) {
+  constexpr write_pos_type update(const key_type& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
-    return write_pos{shard.update(key, hint.inner()), i};
+    return write_pos_type{shard.update(key, hint.inner()), i};
   }
-  constexpr std::pair<write_pos, probe_seq_type> update_first(const key_type& key) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_first(const key_type& key) {
     auto [shard, i]{to_shard(key)};
     auto [p, s]{shard.update_first(key)};
-    return {write_pos{std::move(p), i}, std::move(s)};
+    return {write_pos_type{std::move(p), i}, std::move(s)};
   }
-  constexpr std::pair<write_pos, probe_seq_type> update_first(const key_type& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_first(const key_type& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
     auto [p, s]{shard.update_first(key, hint.inner())};
-    return {write_pos{std::move(p), i}, std::move(s)};
+    return {write_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::pair<write_pos, probe_seq_type> update_next(write_pos&& pos, PS&& seq, const key_type& key) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
     auto [shard, i]{to_shard(pos, key)};
     auto [p, s]{shard.update_next(std::move(pos.inner_), std::forward<PS>(seq), key)};
-    return {write_pos{std::move(p), i}, std::move(s)};
+    return {write_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename PS>
-  constexpr std::pair<write_pos, probe_seq_type> update_next(write_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(pos, key, hint)};
     auto [p, s]{shard.update_next(std::move(pos.inner_), std::forward<PS>(seq), key, hint.inner())};
-    return {write_pos{std::move(p), i}, std::move(s)};
+    return {write_pos_type{std::move(p), i}, std::move(s)};
   }
   template <typename Pred>
-  constexpr write_pos update_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos>, "`pred` must be pred(const write_pos&) -> bool");
-    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos&) -> bool");
+  constexpr write_pos_type update_if(const Pred& pred) {
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(const write_pos_type&) -> bool");
+    static_assert(arg_type_v<arg_n_t<Pred, 0>> == arg_type_t::const_lvalue_ref, "`pred` must be pred(const write_pos_type&) -> bool");
 
     const shard_idx_t end{num_shards()};
 
     for (shard_idx_t i{}; i < end; ++i) {
       shard_write_pos_type pos{shards_[to_uint(i)].update_if([&](shard_write_pos_type&& pos) {
-        return pred(write_pos{std::move(pos), i});
+        return pred(write_pos_type{std::move(pos), i});
       })};
-      if (pos != npos) return write_pos{std::move(pos), i};
+      if (pos != npos) return write_pos_type{std::move(pos), i};
     }
     return write_npos();
   }
-  constexpr std::vector<write_pos> update_all(const key_type& key) {
+  constexpr std::vector<write_pos_type> update_all(const key_type& key) {
     auto [shard, i]{to_shard(key)};
 
-    std::vector<write_pos> res;
+    std::vector<write_pos_type> res;
     shard.for_each(key, [&](shard_write_pos_type&& pos, const probe_seq_type&) {
       res.emplace_back(std::move(pos), i);
     });
@@ -1018,15 +1018,15 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename InnerPos>
-  constexpr const value_type& value_at(const pos<InnerPos>& pos) const {
+  constexpr const value_type& value_at(const pos_type<InnerPos>& pos) const {
     return to_shard(pos).first.value_at(pos.inner_);
   }
-  constexpr value_type& value_at(const write_pos& pos) {
+  constexpr value_type& value_at(const write_pos_type& pos) {
     return to_shard(pos).first.value_at(pos.inner_);
   }
 
-  constexpr write_pos write_npos() noexcept {
-    return write_pos{shards_.back().write_npos(), num_shards() - 1};
+  constexpr write_pos_type write_npos() noexcept {
+    return write_pos_type{shards_.back().write_npos(), num_shards() - 1};
   }
 
   constexpr prefetch_hint write_prefetch(const key_type& key) {
@@ -1037,10 +1037,10 @@ class sharded : public container<sharded<Shard>> {
   constexpr void write_prefetch(const key_type& key, const prefetch_hint& hint) {
     to_shard(key, hint).first.write_prefetch(key, hint.inner());
   }
-  constexpr void write_prefetch_value_at(const write_pos& pos) {
+  constexpr void write_prefetch_value_at(const write_pos_type& pos) {
     to_shard(pos).first.write_prefetch_value_at(pos.inner_);
   }
-  constexpr void write_prefetch_blob_at(const write_pos& pos) {
+  constexpr void write_prefetch_blob_at(const write_pos_type& pos) {
     to_shard(pos).first.write_prefetch_blob_at(pos.inner_);
   }
 

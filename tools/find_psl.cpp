@@ -34,7 +34,7 @@ NVHM_NO_INLINE void fill_and_count_probe_seq_lengths() {
   using set_t = Set;
   using conf_t = typename set_t::conf_type;
   using key_t = typename set_t::key_type;
-  using read_pos_t = typename set_t::read_pos;
+  using read_pos_t = typename set_t::read_pos_type;
   using probe_seq_t = typename set_t::probe_seq_type;
 
   std::mt19937_64 rng{seed};

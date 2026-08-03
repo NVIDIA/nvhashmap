@@ -110,7 +110,7 @@ void test_insert() {
   using map_t = map<Key, float, flags_t::blobs, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using read_pos_t = typename map_t::read_pos;
+  using read_pos_t = typename map_t::read_pos_type;
 
   constexpr int_t num_keys{1000};
   key_t keys[num_keys];
@@ -196,7 +196,7 @@ template <typename Key, typename Kernel>
 void test_iterators() {
   using set_t = set<Key, flags_t::none, Kernel>;
   using key_t = typename set_t::key_type;
-  using read_pos_t = typename set_t::read_pos;
+  using read_pos_t = typename set_t::read_pos_type;
 
   constexpr int_t num_keys{100};
   key_t keys[num_keys];
@@ -236,7 +236,7 @@ void test_map_iterators() {
   using map_t = map<Key, float, flags_t::blobs, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using read_pos_t = typename map_t::read_pos;
+  using read_pos_t = typename map_t::read_pos_type;
 
   constexpr int_t num_keys{100};
   key_t keys[num_keys];
@@ -427,7 +427,7 @@ void test_erase() {
   using set_t = set<Key, flags_t::none, Kernel>;
   using conf_t = typename set_t::conf_type;
   using key_t = typename set_t::key_type;
-  using read_pos_t = typename set_t::read_pos;
+  using read_pos_t = typename set_t::read_pos_type;
   
   // Low congestion case.
   {
