@@ -299,10 +299,13 @@ constexpr bool array_equal(const char (&a)[N], const char (&b)[M]) noexcept {
 }
 
 template <typename T>
-constexpr static int_t num_bytes_v{sizeof(T)};
-
-template <>
-constexpr int_t num_bytes_v<void>{};
+constexpr int_t num_bytes_v{[]() {
+  if constexpr (std::is_same_v<remove_cvref_t<T>, void>) {
+    return 0;
+  } else {
+    return sizeof(T);
+  }
+}()};
 
 template <typename T>
 constexpr static int_t num_bits_v{num_bytes_v<T> * 8};
@@ -413,21 +416,14 @@ constexpr int_t aligned_mask_to_capacity(bitmask_t mask) noexcept {
 template <typename T>
 constexpr static T ceil_div(T x, T n) noexcept {
   static_assert(std::is_integral_v<T>);
+  NVHM_ASSERT_(n > 0);
   return (x + n - 1) / n;
 }
 
 template <typename T>
 constexpr static T round_up(T x, T n) noexcept {
+  // Narrows to (x + N - 1) & ~(N - 1) if n is pow2 and constexpr.
   return ceil_div(x, n) * n;
-}
-
-template <int_t N>
-constexpr static int_t round_up(int_t x) noexcept {
-  if constexpr (has_single_bit(N)) {
-    return (x + N - 1) & ~(N - 1);
-  } else {
-    return round_up(x, N);
-  }
 }
 
 template <typename>
@@ -555,7 +551,7 @@ enum class flags_t : uint_t {
   none = 0,
   blobs = 1,                // The map allocates and maintains a blob storage.
   duplicates = 2,           // The map/set allows duplicate keys.
-  aggressive_prefetch = 4,  // Be slightly more aggressive wehn prefetching.
+  aggressive_prefetch = 4,  // Be slightly more aggressive when prefetching.
   auto_scrub = 8,           // Occasional stop-the-world `scrub` upon `erase` to speedup `find`.
   auto_shrink = 16,         // Occasional stop-the-world `shrink` in `erase` to speedup `find`.
   all = blobs | duplicates | aggressive_prefetch | auto_scrub | auto_shrink

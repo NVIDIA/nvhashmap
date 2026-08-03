@@ -402,28 +402,10 @@ void test_bit_ceil() {
     EXPECT_EQ(bit_ceil(n), std::bit_ceil(n)) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
 #endif
   }
-  
-  n = (one<T> << (num_bits_v<T> - 1)) | (one<T> << (num_bits_v<T> / 2));
-#if defined(__cpp_lib_int_pow2)
-  r = std::bit_ceil(n);
-#else
-  r = zero<T>;
-#endif
-  EXPECT_EQ(std_ext::bit_ceil(n), zero<T>) << "n: " << static_cast<__uint128_t>(n) << " r: " << static_cast<__uint128_t>(r);
-  EXPECT_EQ(std_ext::bit_ceil_fallback(n), zero<T>) << "n: " << static_cast<__uint128_t>(n) << " r: " << static_cast<__uint128_t>(r);
-  
-  n = full<T>;
-#if defined(__cpp_lib_int_pow2)
-  r = std::bit_ceil(n);
-#else
-  r = zero<T>;
-#endif
-  EXPECT_EQ(std_ext::bit_ceil(n), zero<T>) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
-  EXPECT_EQ(std_ext::bit_ceil_fallback(n), zero<T>) << "n: " << n << " r: " << static_cast<__uint128_t>(r);
 
   for (int_t i{}; i < num_random_tests; ++i) {
     n = gen<T>();
-    // Note: Overflow behavior is actually undefined for std::bit_ceil.
+    // Note: Overflow behavior is undefined for `std::bit_ceil` and our reimplementations.
     if (countl_zero(n) == 0 && popcount(n) > 1) {
       n >>= 1;
     }

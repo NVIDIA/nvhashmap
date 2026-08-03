@@ -78,7 +78,6 @@ int compile_map(Args&&... args) {
   key_t k;
   state_t s;
   lru_t l;
-  insert_op_t op;
   value_t v;
   value_t& rv{v};
   std::string str;
@@ -96,10 +95,10 @@ int compile_map(Args&&... args) {
   if constexpr (map_t::has_blobs) {
     c.set_blob(128);
   }
-  map_t map{args..., c};
+  map_t map{std::forward<Args>(args)..., c};
   const map_t& cmap{map};
 
-  write_pos_t w_pos{map.insert(k)};
+  auto [w_pos, op]{map.insert(k)};
   prefetch_hint_t hint{map.read_prefetch(k)};
   read_pos_t r_pos{downgrade<read_pos_t>(std::move(w_pos))};
   const_iterator_t cit{cmap.begin()};
@@ -249,10 +248,10 @@ int compile_map(Args&&... args) {
 
   i = map.grow();
 
-  w_pos = map.insert(k);
-  w_pos = map.insert(std::move(k));
-  std::tie(w_pos, seq, op) = map.insert_ex(k);
-  std::tie(w_pos, seq, op) = map.insert_ex(std::move(k));
+  std::tie(w_pos, op) = map.insert(k);
+  std::tie(w_pos, op) = map.insert(std::move(k));
+  std::tie(w_pos, op, seq) = map.insert_ex(k);
+  std::tie(w_pos, op, seq) = map.insert_ex(std::move(k));
   i = map.insert_range(keys.begin(), keys.end());
 
   b = cmap.is_empty();

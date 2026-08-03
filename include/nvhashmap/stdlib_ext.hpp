@@ -49,7 +49,7 @@ using remove_cvref_t = typename remove_cvref<T>::type;
 #endif
 
 template <typename T, typename U>
-constexpr T broadcast(const U x) noexcept {
+[[nodiscard]] constexpr T broadcast(const U x) noexcept {
   static_assert(is_unsigned_v<T> && is_unsigned_v<U>);
   static_assert(sizeof(T) >= sizeof(U) && sizeof(T) % sizeof(U) == 0);
 
@@ -60,26 +60,24 @@ constexpr T broadcast(const U x) noexcept {
   return y;
 }
 
-constexpr uint64_t low_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x); }
-constexpr uint64_t high_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x >> 64); }
+[[nodiscard]] constexpr uint64_t low_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x); }
+[[nodiscard]] constexpr uint64_t high_bits(__uint128_t x) noexcept { return static_cast<uint64_t>(x >> 64); }
 
 namespace std_ext {
 
 template <size_t N, typename T>
-constexpr T* assume_aligned(T* p) noexcept {
+[[nodiscard]] constexpr T* assume_aligned(T* p) noexcept {
   static_assert(N >= alignof(T) && N % alignof(T) == 0);
 
-  #if defined(__GNUC__) || defined(__clang__)
-  #if __has_builtin(__builtin_assume_aligned)
+  #if defined(__has_builtin) && __has_builtin(__builtin_assume_aligned)
   return static_cast<T*>(__builtin_assume_aligned(p, N));
-  #endif
   #endif
 
   return p;
 }
 
 template <typename T, typename... Args>
-constexpr T* construct_at(T* ptr, Args&&... args) {
+[[nodiscard]] constexpr T* construct_at(T* ptr, Args&&... args) {
   if constexpr (std::is_array_v<T>) {
     return ::new (static_cast<void*>(ptr)) T[1]();
   } else {
@@ -88,7 +86,7 @@ constexpr T* construct_at(T* ptr, Args&&... args) {
 }
 
 template <typename T>
-constexpr int popcount_fallback(T x) noexcept {
+[[nodiscard]] constexpr int popcount_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   static_assert(sizeof(T) <= 16, "Top byte summing trick only works for types up to 16 bytes!");
 
@@ -108,10 +106,10 @@ constexpr int popcount_fallback(T x) noexcept {
 }
 
 template <typename T>
-constexpr int popcount(T x) noexcept {
+[[nodiscard]] constexpr int popcount(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
-  #if defined(__GNUC__) || defined(__clang__)
+  #if defined(__has_builtin)
   #if __has_builtin(__builtin_popcountg)
   return __builtin_popcountg(x);
   #endif
@@ -138,7 +136,7 @@ constexpr int popcount(T x) noexcept {
 }
 
 template <typename T>
-constexpr int countl_zero_fallback(T x) noexcept {
+[[nodiscard]] constexpr int countl_zero_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
   // Smear highest bit down.
@@ -150,11 +148,11 @@ constexpr int countl_zero_fallback(T x) noexcept {
 }
 
 template <typename T>
-constexpr int countl_zero(T x) noexcept {
+[[nodiscard]] constexpr int countl_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-  #if defined(__GNUC__) || defined(__clang__)
+  #if defined(__has_builtin)
   #if __has_builtin(__builtin_clzg)
   return __builtin_clzg(x, n);
   #endif
@@ -182,7 +180,7 @@ constexpr int countl_zero(T x) noexcept {
 }
 
 template <typename T>
-constexpr int countr_zero_fallback(T x) noexcept {
+[[nodiscard]] constexpr int countr_zero_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
   int z{x != 0};
@@ -191,11 +189,11 @@ constexpr int countr_zero_fallback(T x) noexcept {
 }
 
 template <typename T>
-constexpr int countr_zero(T x) noexcept {
+[[nodiscard]] constexpr int countr_zero(T x) noexcept {
   static_assert(is_unsigned_v<T>);
   constexpr int n{sizeof(T) * 8};
 
-  #if defined(__GNUC__) || defined(__clang__)
+  #if defined(__has_builtin)
   #if __has_builtin(__builtin_ctzg)
   return __builtin_ctzg(x, n);
   #endif
@@ -204,12 +202,12 @@ constexpr int countr_zero(T x) noexcept {
   if constexpr (sizeof(T) <= sizeof(uint16_t)) {
     return __builtin_ctz(x | (UINT32_C(1) << n));
   }
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    return x ? __builtin_ctz(x) : n;
+  }
   #endif
 
   #if __has_builtin(__builtin_ctzll)
-  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
-    return __builtin_ctzll(x | (UINT64_C(1) << n));
-  }
   if constexpr (sizeof(T) <= sizeof(uint64_t)) {
     return x ? __builtin_ctzll(x) : n;
   }
@@ -225,7 +223,7 @@ constexpr int countr_zero(T x) noexcept {
 }
 
 template <typename T>
-constexpr T rotl_fallback(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotl_fallback(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
   constexpr int n{sizeof(T) * 8};
@@ -239,10 +237,10 @@ constexpr T rotl_fallback(T x, int s) noexcept {
 }
 
 template <typename T>
-constexpr T rotl(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotl(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
-  #if defined(__GNUC__) || defined(__clang__)
+  #if defined(__has_builtin)
   #if __has_builtin(__builtin_rotateleft8)
   if constexpr (sizeof(T) == sizeof(uint8_t)) {
     return __builtin_rotateleft8(x, static_cast<uint8_t>(s));
@@ -272,7 +270,7 @@ constexpr T rotl(T x, int s) noexcept {
 }
 
 template <typename T>
-constexpr T rotr_fallback(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotr_fallback(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
   constexpr int n{sizeof(T) * 8};
@@ -286,10 +284,10 @@ constexpr T rotr_fallback(T x, int s) noexcept {
 }
 
 template <typename T>
-constexpr T rotr(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotr(T x, int s) noexcept {
   static_assert(is_unsigned_v<T>);
 
-  #if defined(__GNUC__) || defined(__clang__)
+  #if defined(__has_builtin)
   #if __has_builtin(__builtin_rotateright8)
   if constexpr (sizeof(T) == sizeof(uint8_t)) {
     return __builtin_rotateright8(x, static_cast<uint8_t>(s));
@@ -319,11 +317,8 @@ constexpr T rotr(T x, int s) noexcept {
 }
 
 template <typename T>
-constexpr T bit_ceil_fallback(T x) noexcept {
+[[nodiscard]] constexpr T bit_ceil_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
-
-  // Annoying, but makes it compatible with std::bit_ceil.
-  if (x == 0) return 1;
 
   // Shuffle down highest bit after substract 1. Then add 1 back to flip the `next` bit.
   --x;
@@ -333,44 +328,34 @@ constexpr T bit_ceil_fallback(T x) noexcept {
   }
   ++x;
 
-  return x;
+  return x <= 1 ? 1 : x;
 }
 
 template <typename T>
-constexpr T bit_ceil(T x) noexcept {
+[[nodiscard]] constexpr T bit_ceil(T x) noexcept {
   static_assert(is_unsigned_v<T>);
-  #if defined(__clang__) && defined(__x86_64__)
-  // TODO: Figure out why this breaks test_basics.cpp for __uint128_t on clang, but only with x86_64.
-  if constexpr (sizeof(T) >= sizeof(__uint128_t)) {
-    return bit_ceil_fallback(x);
+  constexpr int n{sizeof(T) * 8};
+
+  T y{1};
+  if (x > 1) {
+    y = static_cast<T>(y << (n - countl_zero(--x)));
   }
-  #endif
-  // Annoying, but makes it compatible with std::bit_ceil.
-  if (x == 0) return 1;
-
-  int n{sizeof(T) * 8};
-  int s{countl_zero(--x)};
-
-  x = s != 0;
-  x <<= n - s;
-
-  return x;
+  return y;
 }
 
 template <typename T>
-constexpr bool has_single_bit_fallback(T x) noexcept {
+[[nodiscard]] constexpr bool has_single_bit_fallback(T x) noexcept {
   static_assert(is_unsigned_v<T>);
-
   return (x != 0) & !(x & (x - 1));
 }
 
 template <typename T>
-constexpr bool has_single_bit(T x) noexcept {
+[[nodiscard]] constexpr bool has_single_bit(T x) noexcept {
   static_assert(is_unsigned_v<T>);
 
-#if defined(__clang__)
+  #if defined(__x86_64__) && defined(__POPCNT__)
   return popcount(x) == 1;
-#endif
+  #endif
 
   return has_single_bit_fallback(x);
 }
@@ -381,13 +366,13 @@ constexpr bool has_single_bit(T x) noexcept {
 namespace nvhm {
 
 template <size_t N, typename T>
-constexpr T* assume_aligned(T* p) noexcept {
+[[nodiscard]] constexpr T* assume_aligned(T* p) noexcept {
   static_assert(N >= alignof(T) && N % alignof(T) == 0);
-#if defined(__cpp_lib_assume_aligned)
+  #if defined(__cpp_lib_assume_aligned)
   return std::assume_aligned<N>(p);
-#else
+  #else
   return std_ext::assume_aligned<N>(p);
-#endif
+  #endif
 }
 
 #if defined(__cpp_lib_construct_at)
@@ -397,91 +382,91 @@ using std_ext::construct_at;
 #endif
 
 template <typename T>
-constexpr int countl_zero(T x) noexcept {
+[[nodiscard]] constexpr int countl_zero(T x) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return countl_zero(static_cast<std::make_unsigned_t<T>>(x));
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::countl_zero(x);
-#endif
+  #endif
   } else {
     return std_ext::countl_zero(x);
   }
 }
 
 template <typename T>
-constexpr int countr_zero(T x) noexcept {
+[[nodiscard]] constexpr int countr_zero(T x) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return countr_zero(static_cast<std::make_unsigned_t<T>>(x));
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::countr_zero(x);
-#endif
+  #endif
   } else {
     return std_ext::countr_zero(x);
   }
 }
 
 template <typename T>
-constexpr int popcount(T x) noexcept {
+[[nodiscard]] constexpr int popcount(T x) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return popcount(static_cast<std::make_unsigned_t<T>>(x));
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::popcount(x);
-#endif
+  #endif
   } else {
     return std_ext::popcount(x);
   }
 }
 
 template <typename T>
-constexpr T rotl(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotl(T x, int s) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return rotl(static_cast<std::make_unsigned_t<T>>(x), s);
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::rotl(x, s);
-#endif
+  #endif
   } else {
     return std_ext::rotl(x, s);
   }
 }
 
 template <typename T>
-constexpr T rotr(T x, int s) noexcept {
+[[nodiscard]] constexpr T rotr(T x, int s) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return rotr(static_cast<std::make_unsigned_t<T>>(x), s);
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::rotr(x, s);
-#endif
+  #endif
   } else {
     return std_ext::rotr(x, s);
   }
 }
 
 template <typename T>
-constexpr T bit_ceil(T x) noexcept {
+[[nodiscard]] constexpr T bit_ceil(T x) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return static_cast<T>(bit_ceil(static_cast<std::make_unsigned_t<T>>(x)));
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::bit_ceil(x);
-#endif
+  #endif
   } else {
     return std_ext::bit_ceil(x);
   }
 }
 
 template <typename T>
-constexpr bool has_single_bit(T x) noexcept {
+[[nodiscard]] constexpr bool has_single_bit(T x) noexcept {
   if constexpr (std::is_signed_v<T>) {
     return has_single_bit(static_cast<std::make_unsigned_t<T>>(x));
-#if defined(__cpp_lib_bitops)
+  #if defined(__cpp_lib_bitops)
   } else if constexpr (std::is_unsigned_v<T>) {
     return std::has_single_bit(x);
-#endif
+  #endif
   } else {
     return std_ext::has_single_bit(x);
   }

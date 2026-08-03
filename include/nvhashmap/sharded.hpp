@@ -701,26 +701,28 @@ class sharded : public container<sharded<Shard>> {
   }
 
   template <typename K>
-  constexpr write_pos insert(K&& key) {
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key) {
     auto [shard, i]{to_shard(key)};
-    return write_pos{shard.insert(std::forward<K>(key)), i};
+    auto [p, op]{shard.insert(std::forward<K>(key))};
+    return {write_pos{std::move(p), i}, op};
   }
   template <typename K>
-  constexpr write_pos insert(K&& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
-    return write_pos{shard.insert(std::forward<K>(key), hint.inner()), i};
+    auto [p, op]{shard.insert(std::forward<K>(key), hint.inner())};
+    return {write_pos{std::move(p), i}, op};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key) {
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key) {
     auto [shard, i]{to_shard(key)};
-    auto [p, s, op]{shard.insert_ex(std::forward<K>(key))};
-    return {write_pos{std::move(p), i}, std::move(s), op};
+    auto [p, op, s]{shard.insert_ex(std::forward<K>(key))};
+    return {write_pos{std::move(p), i}, op, std::move(s)};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key, const prefetch_hint& hint) {
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
     auto [shard, i]{to_shard(key, hint)};
-    auto [p, s, op]{shard.insert_ex(std::forward<K>(key), hint.inner())};
-    return {write_pos{std::move(p), i}, std::move(s), op};
+    auto [p, op, s]{shard.insert_ex(std::forward<K>(key), hint.inner())};
+    return {write_pos{std::move(p), i}, op, std::move(s)};
   }
 
   constexpr bool is_empty() const {

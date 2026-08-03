@@ -750,26 +750,28 @@ class guarded : public container<guarded<Inner>> {
   }
 
   template <typename K>
-  constexpr write_pos insert(K&& key) {
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key) {
     write_lock_type lock{lock_()};
-    return write_pos{inner_.insert(std::forward<K>(key)), std::move(lock)};
+    auto [p, op]{inner_.insert(std::forward<K>(key))};
+    return {write_pos{std::move(p), std::move(lock)}, op};
   }
   template <typename K>
-  constexpr write_pos insert(K&& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
     write_lock_type lock{lock_()};
-    return write_pos{inner_.insert(std::forward<K>(key), hint.inner()), std::move(lock)};
+    auto [p, op]{inner_.insert(std::forward<K>(key), hint.inner())};
+    return {write_pos{std::move(p), std::move(lock)}, op};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key) {
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key) {
     write_lock_type lock{lock_()};
-    auto [p, s, op]{inner_.insert_ex(std::forward<K>(key))};
-    return {write_pos{std::move(p), std::move(lock)}, std::move(s), op};
+    auto [p, op, s]{inner_.insert_ex(std::forward<K>(key))};
+    return {write_pos{std::move(p), std::move(lock)}, op, std::move(s)};
   }
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key, const prefetch_hint& hint) {
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
     write_lock_type lock{lock_()};
-    auto [p, s, op]{inner_.insert_ex(std::forward<K>(key), hint.inner())};
-    return {write_pos{std::move(p), std::move(lock)}, std::move(s), op};
+    auto [p, op, s]{inner_.insert_ex(std::forward<K>(key), hint.inner())};
+    return {write_pos{std::move(p), std::move(lock)}, op, std::move(s)};
   }
 
   constexpr bool is_empty() const {

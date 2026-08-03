@@ -636,7 +636,7 @@ class map : public swiss_map_base<
   }
 
   template <typename K>
-  NVHM_ALWAYS_INLINE constexpr std::tuple<raw_pos_t, probe_seq_type, insert_op_t> insert_(
+  NVHM_ALWAYS_INLINE constexpr std::tuple<raw_pos_t, insert_op_t, probe_seq_type> insert_(
     K&& __restrict key, const hash_t hash
   ) {
     static_assert(std::is_same_v<remove_cvref_t<K>, key_type>, "K must be `key_type`!");
@@ -677,7 +677,7 @@ class map : public swiss_map_base<
               const raw_pos_t pos{mask_type::next(m, off)};
               if (NVHM_LIKELY_(keys[pos] != key)) continue;
 
-              return {pos, std::move(seq), insert_op_t::found};
+              return {pos, insert_op_t::found, std::move(seq)};
             }
           }
 
@@ -710,7 +710,7 @@ class map : public swiss_map_base<
           num_empty_ -= state_is_empty;
           num_tombstone_ -= 1 - state_is_empty;
           NVHM_ASSERT_(check_integrity_());
-          return {ins_pos, std::move(seq), insert_op_t::insert};
+          return {ins_pos, insert_op_t::insert, std::move(seq)};
         }
       } else {
         // We have ensured that there are no tombstones. So, we can insert into the first available slot.
@@ -726,7 +726,7 @@ class map : public swiss_map_base<
               const raw_pos_t pos{mask_type::next(m, off)};
               if (NVHM_LIKELY_(keys[pos] != key)) continue;
 
-              return {pos, std::move(seq), insert_op_t::found};
+              return {pos, insert_op_t::found, std::move(seq)};
             }
           }
 
@@ -741,7 +741,7 @@ class map : public swiss_map_base<
 
           --num_empty_;
           NVHM_ASSERT_(check_integrity_());
-          return {pos, std::move(seq), insert_op_t::insert};
+          return {pos, insert_op_t::insert, std::move(seq)};
         }
       }
 

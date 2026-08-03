@@ -914,8 +914,9 @@ class raw_map_base : public container<Self> {
    * @return Insertion position, or `npos` if the insertion failed.
    */
   template <typename K>
-  constexpr write_pos insert(K&& key) {
-    return write_pos{std::get<0>(self()->insert_(std::forward<K>(key), key_to_hash(key)))};
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
+    return {write_pos{p}, op};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -925,8 +926,9 @@ class raw_map_base : public container<Self> {
    * @return Insertion position, or `npos` if the insertion failed.
    */
   template <typename K>
-  constexpr write_pos insert(K&& key, const prefetch_hint& hint) {
-    return write_pos{std::get<0>(self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint)))};
+  constexpr std::pair<write_pos, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
+    return {write_pos{p}, op};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -935,9 +937,9 @@ class raw_map_base : public container<Self> {
    * @return The insertion position, the associated probe sequence, and the insert operation conducted.
    */
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key) {
-    auto [p, s, op]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
-    return {write_pos{p}, std::move(s), op};
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
+    return {write_pos{p}, op, std::move(s)};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -947,9 +949,9 @@ class raw_map_base : public container<Self> {
    * @return The insertion position, the associated probe sequence, and the insert operation conducted.
    */
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key, const prefetch_hint& hint) {
-    auto [p, s, op]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
-    return {write_pos{p}, std::move(s), op};
+  constexpr std::tuple<write_pos, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
+    return {write_pos{p}, op, std::move(s)};
   }
 
   /**

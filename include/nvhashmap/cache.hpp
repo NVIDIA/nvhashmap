@@ -508,7 +508,7 @@ class cache : public swiss_map_base<
   }
 
   template <typename K>
-  inline std::tuple<raw_pos_t, probe_seq_type, insert_op_t> insert_(K&& __restrict key, const hash_t hash) {
+  inline std::tuple<raw_pos_t, insert_op_t, probe_seq_type> insert_(K&& __restrict key, const hash_t hash) {
     static_assert(std::is_same_v<remove_cvref_t<K>, key_type>, "K must be `key_type`!");
     if constexpr (std::is_floating_point_v<key_type>) {
       if (key != key) {
@@ -541,7 +541,7 @@ class cache : public swiss_map_base<
         l = kernel_type::update_lru(l, m);
         kernel_type::store_lru(l, &lrus[off * 2]);
 
-        return {pos, std::move(seq), insert_op_t::found};
+        return {pos, insert_op_t::found, std::move(seq)};
       }
     }
 
@@ -565,7 +565,7 @@ class cache : public swiss_map_base<
     num_empty_ -= (op == insert_op_t::insert);
     NVHM_ASSERT_(check_integrity_());
 
-    return {pos, std::move(seq), op};
+    return {pos, op, std::move(seq)};
   }
 
   constexpr bool is_full_() const noexcept { return size() >= capacity(); }

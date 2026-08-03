@@ -146,9 +146,9 @@ NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key
 
   write_pos_t pos{[&](){
     if constexpr (std::is_same_v<PrefetchHint, std::monostate>) {
-      return map.insert(k);
+      return map.insert(k).first;
     } else {
-      return map.insert(k, std::forward<PrefetchHint>(h));
+      return map.insert(k, std::forward<PrefetchHint>(h)).first;
     }
   }()};
   NVHM_ASSERT_(pos != npos);

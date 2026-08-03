@@ -54,7 +54,22 @@ namespace nvhm {
    */                                                                                         \
   constexpr std::vector<key_type> keys() const {                                              \
     std::vector<key_type> res;                                                                \
+    res.reserve(to_uint(self()->size()));                                                     \
     self()->for_each_key([&](const key_type& key) { res.emplace_back(key); });                \
+    return res;                                                                               \
+  }                                                                                           \
+                                                                                              \
+  /**                                                                                         \
+   * Retrieve all keys & values in the data structure.                                        \
+   *                                                                                          \
+   * @return The keys.                                                                        \
+   */                                                                                         \
+  constexpr std::vector<std::pair<key_type, value_type>> keys_and_values() const {            \
+    std::vector<std::pair<key_type, value_type>> res;                                         \
+    res.reserve(to_uint(self()->size()));                                                     \
+    self()->for_each([&](read_pos&& pos) {                                                    \
+      res.emplace_back(self()->key_at(pos), self()->value_at(pos));                           \
+    });                                                                                       \
     return res;                                                                               \
   }                                                                                           \
                                                                                               \
@@ -65,6 +80,7 @@ namespace nvhm {
    */                                                                                         \
   constexpr std::vector<value_type> values() const {                                          \
     std::vector<value_type> res;                                                              \
+    res.reserve(to_uint(self()->size()));                                                     \
     self()->for_each_value([&](const value_type& value) { res.emplace_back(value); });        \
     return res;                                                                               \
   }
@@ -139,7 +155,7 @@ class container : public self_aware<Self> {
   constexpr int_t insert_range(It first, It last) {
     int_t n{};
     for (; first != last; ++first) {
-      n += self()->insert(*first) != npos;
+      n += self()->insert(*first).first != npos;
     }
     return n;
   }

@@ -101,16 +101,16 @@ constexpr std::pair<int_t, int_t> alloc_size(int_t n) noexcept {
   if constexpr (page_align) {
     if constexpr (allow_hugepages) {
       if (n >= switch_threshold_t::num * hugepage_size / switch_threshold_t::den) {
-        return {hugepage_size, round_up<hugepage_size>(n)};
+        return {hugepage_size, round_up(n, hugepage_size)};
       }
     }
 
     if (n >= switch_threshold_t::num * page_size / switch_threshold_t::den) {
-      return {page_size, round_up<page_size>(n)};
+      return {page_size, round_up(n, page_size)};
     }
   }
 
-  return {cache_line_size, round_up<cache_line_size>(n)};
+  return {cache_line_size, round_up(n, cache_line_size)};
 }
 
 /**
@@ -312,7 +312,6 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
   constexpr friend std::unique_ptr<T[], deleter_t<T, Allocator>> make_unique(int_t);
 };
 
-// TODO: Switch allocator as needed.
 using default_allocator_t = std::conditional_t<prefer_madvice_hugepages, madv_allocator<>, mmap_allocator<>>;
 
 }  // namespace nvhm
