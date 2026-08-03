@@ -121,6 +121,10 @@ void test_insert() {
 
   constexpr int_t n{map_t::kernel_size * 10 / 16};
 
+  // Just insert.
+  EXPECT_TRUE(map.keys().empty());
+  EXPECT_TRUE(map.keys_and_values().empty());
+
   for (int_t i{}; i < n; ++i) {
     auto [pos, op, seq]{map.insert_ex(keys[i])};
     EXPECT_GE(pos, 0);
@@ -131,6 +135,14 @@ void test_insert() {
     float value{key_to_float(keys[i])};
     map.value_at(pos) = value;
     map.set_blob_at(pos, &value);
+  }
+
+  for (const auto& key : map.keys()) {
+    EXPECT_NE(std::find(std::begin(keys), std::end(keys), key), std::end(keys)) << "key = " << key << " not found in keys";
+  }
+  for (const auto& [key, value] : map.keys_and_values()) {
+    EXPECT_NE(std::find(std::begin(keys), std::end(keys), key), std::end(keys)) << "key = " << key << " not found in keys";
+    EXPECT_EQ(value, key_to_float(key));
   }
 
   // Should lead to `found` situation.
