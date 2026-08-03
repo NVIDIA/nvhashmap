@@ -21,8 +21,6 @@
 #include <nvhashmap/map.hpp>
 #include <numeric>
 #include <nvhashmap/cache.hpp>
-#include <nvhashmap/guarded.hpp>
-#include <nvhashmap/sharded.hpp>
 #include <set>
 
 using namespace nvhm;
