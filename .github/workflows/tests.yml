@@ -81,9 +81,9 @@ jobs:
       - name: Run GoogleTest binaries
         run: |
           ./build/tests/test_basics
-          ./build/tests/test_memory
           ./build/tests/test_masks
           ./build/tests/test_kernels
+          ./build/tests/test_probe_seq
           ./build/tests/test_maps
           ./build/tests/test_mutex
-          ./build/tests/test_probe_seq
+          

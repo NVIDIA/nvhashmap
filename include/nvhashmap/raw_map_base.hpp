@@ -885,7 +885,7 @@ class raw_map_base : public container<Self> {
    * @param dst The destination buffer.
    */
   constexpr void get_blob_at(const pos_type& pos, void* dst) const {
-    copy_blob(dst, blob_at(pos), conf_.blob_size());
+    std::memcpy(dst, blob_at(pos), to_uint(conf_.blob_size()));
   }
   /**
    * Retrieve the blob at `pos` and copy it to `dst`.
@@ -897,7 +897,7 @@ class raw_map_base : public container<Self> {
   constexpr void get_blob_at(const pos_type& pos, void* dst, int_t n) const {
     const int_t blob_size{conf_.blob_size()};
     NVHM_ASSUME_(n <= blob_size, "n = ", n, ", blob_size = ", blob_size);
-    copy_blob(dst, self()->blob_at(pos), n);
+    std::memcpy(dst, self()->blob_at(pos), to_uint(n));
   }
 
   /**
@@ -1163,7 +1163,7 @@ class raw_map_base : public container<Self> {
    * @param src The source buffer.
    */
   constexpr void set_blob_at(const write_pos_type& pos, const void* src) {
-    copy_blob(blob_at(pos), src, conf_.blob_size());
+    std::memcpy(blob_at(pos), src, to_uint(conf_.blob_size()));
   }
   /**
    * Overwrite the blob at `pos` with the contents of `src`.
@@ -1174,7 +1174,7 @@ class raw_map_base : public container<Self> {
    */
   constexpr void set_blob_at(const write_pos_type& pos, const void* src, int_t n) {
     NVHM_ASSUME_(n <= conf_.blob_size(), "n = ", n, ", blob_size = ", conf_.blob_size());
-    copy_blob(blob_at(pos), src, n);
+    std::memcpy(blob_at(pos), src, to_uint(n));
   }
 
   /**

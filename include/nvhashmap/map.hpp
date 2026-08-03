@@ -896,7 +896,7 @@ class map : public swiss_map_base<
                 }
               }
               if constexpr (has_blobs) {
-                copy_blob(&new_blobs[new_pos * blob_stride], &old_blobs[old_pos * blob_stride], blob_size);
+                std::memcpy(&new_blobs[new_pos * blob_stride], &old_blobs[old_pos * blob_stride], to_uint(blob_size));
               }
 
               goto next_old_pos;
@@ -984,7 +984,7 @@ class map : public swiss_map_base<
                 values[new_pos] = std::move(values[old_pos]);
               }
               if constexpr (has_blobs) {
-                copy_blob(&blobs[new_pos * blob_stride], &blobs[old_pos * blob_stride], blob_size);
+                std::memcpy(&blobs[new_pos * blob_stride], &blobs[old_pos * blob_stride], to_uint(blob_size));
               }
 
               if (kernel_type::has_empty(old_k)) {

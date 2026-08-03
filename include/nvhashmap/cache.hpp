@@ -682,7 +682,7 @@ class cache : public swiss_map_base<
           values[new_pos] = std::move(old_values[old_pos]);
         }
         if constexpr (has_blobs) {
-          copy_blob(&blobs[new_pos * blob_stride], &old_blobs[old_pos * blob_stride], blob_size);
+          std::memcpy(&blobs[new_pos * blob_stride], &old_blobs[old_pos * blob_stride], to_uint(blob_size));
         }
         keys[new_pos] = std::move(old_keys[old_pos]);
         states[new_off * 2 + new_idx] = hash_to_state(hash);

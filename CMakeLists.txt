@@ -465,12 +465,6 @@ else()
   option(NVHM_WANT_SVE2         "Enable SVE2"         OFF)
 endif()
 
-if(${NVHM_WANT_SVE})
-  option(NVHM_WANT_SVE_COPY "Use SVE copy function by instead of memcpy for blobs" ON )
-else()
-  option(NVHM_WANT_SVE_COPY "Use SVE copy function by instead of memcpy for blobs" OFF)
-endif()
-
 set(NVHM_WANT_PREFETCH_CACHE_LEVEL "2" CACHE STRING "Cache level to aim for when issuing prefetches")
 
 option(NVHM_WANT_RANGE_PREFETCH "Use scoped SVE prefetches (experimental feature, not for production use)" OFF)
@@ -495,7 +489,6 @@ message(STATUS "NVHM_WANT_NEON                  = ${NVHM_WANT_NEON}"            
 message(STATUS "NVHM_WANT_SVE                   = ${NVHM_WANT_SVE}"                  )
 message(STATUS "NVHM_WANT_SVE_SIZE              = ${NVHM_WANT_SVE_SIZE}"             )
 message(STATUS "NVHM_WANT_SVE2                  = ${NVHM_WANT_SVE2}"                 )
-message(STATUS "NVHM_WANT_SVE_COPY              = ${NVHM_WANT_SVE_COPY}"             )
 message(STATUS "NVHM_WANT_RANGE_PREFETCH        = ${NVHM_WANT_RANGE_PREFETCH}"       )
 
 if ("${NVHM_TARGET}" STREQUAL "x86_64")
@@ -693,11 +686,6 @@ constexpr static bool prefer_madvice_hugepages{$<BOOL:${NVHM_WANT_TRANSPARENT_HU
  */
 constexpr static int prefetch_cache_level{${NVHM_WANT_PREFETCH_CACHE_LEVEL}};
 static_assert(prefetch_cache_level >= 1 && prefetch_cache_level <= 5);
-
-/**
- * Use SVE copy function by default.
- */
-constexpr static bool use_sve_copy{$<BOOL:${NVHM_WANT_SVE_COPY}>};
 
 /**
  * Prefer SSE prefetch over builtin prefetch.
