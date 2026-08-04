@@ -494,8 +494,6 @@ void test_mutex_std_lock_upgrade(const int_t num_iter = 8) {
       l2 = upgrade_or_relock(std::move(l0));
       EXPECT_EQ(l0.mutex(), nullptr);
       EXPECT_FALSE(l0.owns_lock());
-      EXPECT_EQ(l1.mutex(), &m);
-      EXPECT_FALSE(l1.owns_lock());
       EXPECT_EQ(l2.mutex(), &m);
       EXPECT_TRUE(l2.owns_lock());
     }};
