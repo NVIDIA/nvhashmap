@@ -25,5 +25,7 @@ using namespace nvhm;
 
 int main() {
   using guarded_t = guarded<map<dummy_key, dummy_value, flags_t::all>>;
-  return compile_map<true, guarded_t>();
+  return
+    compile_map<true, guarded_t>() +
+    compile_map<true, guarded<guarded_t>>();
 }

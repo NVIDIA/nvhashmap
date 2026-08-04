@@ -35,8 +35,8 @@ class std_map_shim {
   using size_type = std::size_t;
   using difference_type = std::ptrdiff_t;
 
-  using inner_read_pos_type = typename inner_type::read_pos;
-  using inner_write_pos_type = typename inner_type::write_pos;
+  using inner_read_pos_type = typename inner_type::read_pos_type;
+  using inner_write_pos_type = typename inner_type::write_pos_type;
   using inner_const_iterator_type = typename inner_type::const_iterator;
   using inner_iterator_type = typename inner_type::iterator;
 
@@ -256,7 +256,7 @@ class std_map_shim {
 
   template <typename K, typename V>
   constexpr std::pair<iterator, bool> insert(K&& key, V&& value) {
-    auto [pos, seq, op]{inner_.insert_ex(std::forward<K>(key))};
+    auto [pos, op]{inner_.insert(std::forward<K>(key))};
     if (op == insert_op_t::reject) {
       throw std::runtime_error("Key insertion was rejected by the underlying container!");
     }
@@ -270,7 +270,7 @@ class std_map_shim {
   }
   template <typename K, typename V>
   constexpr std::pair<iterator, bool> insert_or_assign(K&& key, V&& value) {
-    auto [pos, _, op]{inner_.insert_ex(std::forward<K>(key))};
+    auto [pos, op]{inner_.insert(std::forward<K>(key))};
     if (op == insert_op_t::reject) {
       throw std::runtime_error("Key insertion was rejected by the underlying container!");
     }
@@ -297,7 +297,7 @@ class std_map_shim {
 
   template <typename K, typename... Args>
   constexpr std::pair<iterator, bool> try_emplace(K&& key, Args&&... args) {
-    auto [pos, _, op]{inner_.insert_ex(std::forward<K>(key))};
+    auto [pos, op]{inner_.insert(std::forward<K>(key))};
     if (op == insert_op_t::reject) {
       throw std::runtime_error("Key insertion was rejected by the underlying container!");
     }

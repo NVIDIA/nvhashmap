@@ -106,7 +106,7 @@ class conf : public self_aware<conf<Key, Value, Flags, KernelSize>> {
       if (size < cache_line_size) {
         stride = bit_ceil(size);
       } else {
-        stride = round_up<cache_line_size / 2>(size);
+        stride = round_up(size, cache_line_size / 2);
       }
     } else if (stride < size) {
       throw std::out_of_range("Blob `stride` must be greater than or equal to `size`!");

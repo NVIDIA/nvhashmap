@@ -243,11 +243,4 @@ std::string type_to_string() {
   return s;
 }
 
-template <typename... Args>
-inline std::string to_string(Args&&... args) {
-  std::ostringstream os;
-  render_args(os, std::forward<Args>(args)...);
-  return os.str();
-}
-
 inline std::random_device rd;

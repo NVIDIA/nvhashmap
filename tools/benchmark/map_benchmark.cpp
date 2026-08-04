@@ -142,13 +142,13 @@ int_t blob_size{120};
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE void insert_entry(Map& __restrict map, int_t /*i*/, const Key& __restrict k, PrefetchHint&& h, const char* __restrict blob) {
   using map_t = Map;
-  using write_pos_t = typename map_t::write_pos;
+  using write_pos_t = typename map_t::write_pos_type;
 
   write_pos_t pos{[&](){
     if constexpr (std::is_same_v<PrefetchHint, std::monostate>) {
-      return map.insert(k);
+      return map.insert(k).first;
     } else {
-      return map.insert(k, std::forward<PrefetchHint>(h));
+      return map.insert(k, std::forward<PrefetchHint>(h)).first;
     }
   }()};
   NVHM_ASSERT_(pos != npos);
@@ -256,7 +256,7 @@ bool check_blobs{false};
 template <typename Map, typename Key, typename PrefetchHint>
 NVHM_ALWAYS_INLINE bool find_and_verify(worker& __restrict w, const Map& __restrict map, int_t i, const Key& __restrict k, PrefetchHint&& h, bool should_exist) {
   using map_t = Map;
-  using read_pos_t = typename map_t::read_pos;
+  using read_pos_t = typename map_t::read_pos_type;
   
   read_pos_t pos{[&](){
     if constexpr (std::is_same_v<PrefetchHint, std::monostate>) {
@@ -1175,7 +1175,7 @@ int main(int argc, char* argv[]) {
       << std::left << std::setw(6) << "" << " | "
       << std::right << std::setw(4) << "" << " | " << std::setw(5) << "" << " | " << std::setw(4) << "";
     for (int_t i{}; i < std::max(num_insert_trials, num_find_trials); ++i) {
-      std::cout << " | " << std::setw(5) << to_string('#', i);
+      std::cout << " | " << std::setw(5) << render_args_to_string('#', i);
     }
     std::cout
       << " | " << std::setw(10) << "" << " | " << std::setw(10) << "" << " | " << std::setw(12) << ""

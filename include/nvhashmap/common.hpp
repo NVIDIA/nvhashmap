@@ -68,18 +68,25 @@ constexpr uint_t to_uint(int_t x) noexcept { return static_cast<uint_t>(x); }
     }                                                                        \
   } while (false)
 
+#ifdef NVHM_THROW_
+#error NVHM_THROW_ was defined elsewhere. Something is wrong.
+#endif
+#define NVHM_THROW_(_class_, ...)                                                               \
+  do {                                                                                          \
+    throw _class_(nvhm::render_args_to_string(                                                  \
+      #_class_, ": ", ##__VA_ARGS__, " [", __FUNCTION__, " @ ",  __FILE__, ':', __LINE__,']')); \
+  } while (false)
+
 #ifdef NVHM_ASSUME_
 #error NVHM_ASSUME_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_ASSUME_(_expr_, ...)                                                       \
-  do {                                                                                  \
-    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::release) {              \
-      if (NVHM_UNLIKELY_(!(_expr_))) {                                                  \
-        throw nvhm::logic_error(                                                        \
-          "Assumption failed", __FILE__, __LINE__, __FUNCTION__, #_expr_, ##__VA_ARGS__ \
-        );                                                                              \
-      }                                                                                 \
-    }                                                                                   \
+#define NVHM_ASSUME_(_expr_, ...)                                                           \
+  do {                                                                                      \
+    if constexpr (nvhm::max_check_level >= nvhm::check_level_t::release) {                  \
+      if (NVHM_UNLIKELY_(!(_expr_))) {                                                      \
+        NVHM_THROW_(std::logic_error, "Assumption(", #_expr_, ") failed! ", ##__VA_ARGS__); \
+      }                                                                                     \
+    }                                                                                       \
   } while (false)
 
 #ifdef NVHM_LOG_
@@ -292,10 +299,13 @@ constexpr bool array_equal(const char (&a)[N], const char (&b)[M]) noexcept {
 }
 
 template <typename T>
-constexpr static int_t num_bytes_v{sizeof(T)};
-
-template <>
-constexpr int_t num_bytes_v<void>{};
+constexpr int_t num_bytes_v{[]() {
+  if constexpr (std::is_same_v<remove_cvref_t<T>, void>) {
+    return 0;
+  } else {
+    return sizeof(T);
+  }
+}()};
 
 template <typename T>
 constexpr static int_t num_bits_v{num_bytes_v<T> * 8};
@@ -335,41 +345,12 @@ constexpr std::ostream& render_args(std::ostream& os, Args&&... args) {
   return os;
 }
 
-class logic_error : public std::logic_error {
- public:
-  template <typename... Args>
-  logic_error(
-    const char reason[], const char file[], int_t line, const char func[], const char expr[],
-    Args&&... args
-  ) : std::logic_error(build_message(reason, file, line, func, expr, std::forward<Args>(args)...))
-    , reason_(reason), file_(file), line_(line), func_(func), expr_(expr) {}
-
-  const char* reason() const noexcept { return reason_; }
-  const char* file() const noexcept { return file_; }
-  int_t line() const noexcept { return line_; }
-  const char* function() const noexcept { return func_; }
-  const char* expression() const noexcept { return expr_; }
-
-  template <typename... Args>
-  static std::string build_message(
-    const char reason[], const char file[], int_t line, const char func[], const char expr[],
-    Args&&... args
-  ) {
-    std::ostringstream os;
-    render_args(os, reason, " [", file, ':', line, " @ ", func, " -> ", expr, ']');
-    if constexpr (sizeof...(Args) > 0) {
-      render_args(os, ": ", args...);
-    }
-    return os.str();
-  }
-
- protected:
-  const char* reason_;
-  const char* file_;
-  int_t line_;
-  const char* func_;
-  const char* expr_;
-};
+template <typename... Args>
+inline std::string render_args_to_string(Args&&... args) {
+  std::ostringstream os;
+  render_args(os, std::forward<Args>(args)...);
+  return os.str();
+}
 
 constexpr bitmask_t make_aligned_mask(int_t n, int_t alignment) noexcept {
   NVHM_ASSERT_(n > 0 && has_single_bit(n));
@@ -435,21 +416,14 @@ constexpr int_t aligned_mask_to_capacity(bitmask_t mask) noexcept {
 template <typename T>
 constexpr static T ceil_div(T x, T n) noexcept {
   static_assert(std::is_integral_v<T>);
+  NVHM_ASSERT_(n > 0);
   return (x + n - 1) / n;
 }
 
 template <typename T>
 constexpr static T round_up(T x, T n) noexcept {
+  // Narrows to (x + N - 1) & ~(N - 1) if n is pow2 and constexpr.
   return ceil_div(x, n) * n;
-}
-
-template <int_t N>
-constexpr static int_t round_up(int_t x) noexcept {
-  if constexpr (has_single_bit(N)) {
-    return (x + N - 1) & ~(N - 1);
-  } else {
-    return round_up(x, N);
-  }
 }
 
 template <typename>
@@ -577,7 +551,7 @@ enum class flags_t : uint_t {
   none = 0,
   blobs = 1,                // The map allocates and maintains a blob storage.
   duplicates = 2,           // The map/set allows duplicate keys.
-  aggressive_prefetch = 4,  // Be slightly more aggressive wehn prefetching.
+  aggressive_prefetch = 4,  // Be slightly more aggressive when prefetching.
   auto_scrub = 8,           // Occasional stop-the-world `scrub` upon `erase` to speedup `find`.
   auto_shrink = 16,         // Occasional stop-the-world `shrink` in `erase` to speedup `find`.
   all = blobs | duplicates | aggressive_prefetch | auto_scrub | auto_shrink

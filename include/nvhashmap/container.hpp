@@ -24,49 +24,71 @@ namespace nvhm {
 #if defined(NVHM_CONTAINER_INTERFACE_)
 #error NVHM_CONTAINER_INTERFACE_ was defined elsewhere. Something is wrong.
 #endif
-#define NVHM_CONTAINER_INTERFACE_()                                                           \
-  /**                                                                                         \
-   * Collects the population bucket population distribution.                                  \
-   *                                                                                          \
-   * @return An array of size `kernel_type::size + 1` containing the population distribution. \
-   */                                                                                         \
-  constexpr std::array<int_t, kernel_size + 1> kernel_populations() const {                   \
-    std::array<int_t, kernel_size + 1> counts{};                                              \
-    self()->count_kernel_populations(counts);                                                 \
-    return counts;                                                                            \
-  }                                                                                           \
-                                                                                              \
-  /**                                                                                         \
-   * Count the number of collisions for each bucket.                                          \
-   *                                                                                          \
-   * @return An array of size `kernel_size` containing the number of collision distribution.  \
-   */                                                                                         \
-  constexpr std::array<int_t, kernel_size> state_collisions() const {                         \
-    std::array<int_t, kernel_size> counts{};                                                  \
-    self()->count_state_collisions(counts);                                                   \
-    return counts;                                                                            \
-  }                                                                                           \
-                                                                                              \
-  /**                                                                                         \
-   * Retrieve all keys in the data structure.                                                 \
-   *                                                                                          \
-   * @return The keys.                                                                        \
-   */                                                                                         \
-  constexpr std::vector<key_type> keys() const {                                              \
-    std::vector<key_type> res;                                                                \
-    self()->for_each_key([&](const key_type& key) { res.emplace_back(key); });                \
-    return res;                                                                               \
-  }                                                                                           \
-                                                                                              \
-  /**                                                                                         \
-   * Retrieve all value views in the data structure.                                          \
-   *                                                                                          \
-   * @return The value views.                                                                 \
-   */                                                                                         \
-  constexpr std::vector<value_type> values() const {                                          \
-    std::vector<value_type> res;                                                              \
-    self()->for_each_value([&](const value_type& value) { res.emplace_back(value); });        \
-    return res;                                                                               \
+#define NVHM_CONTAINER_INTERFACE_()                                                             \
+  /**                                                                                           \
+   * Collects the population bucket population distribution.                                    \
+   *                                                                                            \
+   * @return An array of size `kernel_type::size + 1` containing the population distribution.   \
+   */                                                                                           \
+  constexpr std::array<int_t, kernel_size + 1> kernel_populations() const {                     \
+    std::array<int_t, kernel_size + 1> counts{};                                                \
+    self()->count_kernel_populations(counts);                                                   \
+    return counts;                                                                              \
+  }                                                                                             \
+                                                                                                \
+  /**                                                                                           \
+   * Count the number of collisions for each bucket.                                            \
+   *                                                                                            \
+   * @return An array of size `kernel_size` containing the number of collision distribution.    \
+   */                                                                                           \
+  constexpr std::array<int_t, kernel_size> state_collisions() const {                           \
+    std::array<int_t, kernel_size> counts{};                                                    \
+    self()->count_state_collisions(counts);                                                     \
+    return counts;                                                                              \
+  }                                                                                             \
+                                                                                                \
+  /**                                                                                           \
+   * Retrieve all keys in the data structure.                                                   \
+   *                                                                                            \
+   * @return The keys.                                                                          \
+   */                                                                                           \
+  constexpr std::vector<key_type> keys() const {                                                \
+    std::vector<key_type> res;                                                                  \
+    res.reserve(to_uint(self()->size()));                                                       \
+    self()->for_each_key([&](const key_type& key) { res.emplace_back(key); });                  \
+    return res;                                                                                 \
+  }                                                                                             \
+                                                                                                \
+  /**                                                                                           \
+   * Retrieve all keys & values in the data structure.                                          \
+   *                                                                                            \
+   * @return The keys.                                                                          \
+   */                                                                                           \
+  constexpr std::vector<std::pair<key_type, value_type>> keys_and_values() const {              \
+    std::vector<std::pair<key_type, value_type>> res;                                           \
+    res.reserve(to_uint(self()->size()));                                                       \
+    if constexpr (has_blobs) {                                                                  \
+      self()->for_each_entry([&](const key_type& key, const value_type& value, const blob_t*) { \
+        res.emplace_back(key, value);                                                           \
+      });                                                                                       \
+    } else {                                                                                    \
+      self()->for_each_entry([&](const key_type& key, const value_type& value) {                \
+        res.emplace_back(key, value);                                                           \
+      });                                                                                       \
+    }                                                                                           \
+    return res;                                                                                 \
+  }                                                                                             \
+                                                                                                \
+  /**                                                                                           \
+   * Retrieve all value views in the data structure.                                            \
+   *                                                                                            \
+   * @return The value views.                                                                   \
+   */                                                                                           \
+  constexpr std::vector<value_type> values() const {                                            \
+    std::vector<value_type> res;                                                                \
+    res.reserve(to_uint(self()->size()));                                                       \
+    self()->for_each_value([&](const value_type& value) { res.emplace_back(value); });          \
+    return res;                                                                                 \
   }
 
 template <typename Self>
@@ -139,7 +161,7 @@ class container : public self_aware<Self> {
   constexpr int_t insert_range(It first, It last) {
     int_t n{};
     for (; first != last; ++first) {
-      n += self()->insert(*first) != npos;
+      n += self()->insert(*first).first != npos;
     }
     return n;
   }

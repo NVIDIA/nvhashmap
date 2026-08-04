@@ -110,9 +110,9 @@ class raw_map_base : public container<Self> {
   using probe_seq_type = ProbeSeq;
   using allocator_type = Allocator;
 
-  using pos = raw_map_pos;
-  using read_pos = raw_map_read_pos;
-  using write_pos = raw_map_write_pos;
+  using pos_type = raw_map_pos;
+  using read_pos_type = raw_map_read_pos;
+  using write_pos_type = raw_map_write_pos;
 
   template <typename IterSelf, typename Outer>
   class iterator_base : public wrapped_iterator<IterSelf, raw_pos_t, raw_pos_t> {
@@ -290,7 +290,7 @@ class raw_map_base : public container<Self> {
   };
 
   template <typename P>
-  constexpr static bool is_pos_v{std::is_same_v<P, read_pos> || std::is_same_v<P, write_pos>};
+  constexpr static bool is_pos_v{std::is_same_v<P, read_pos_type> || std::is_same_v<P, write_pos_type>};
 
   class prefetch_hint {
    public:
@@ -405,14 +405,14 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr const_entry_type at(const pos& pos) const { return self()->at_(validate(pos)); }
+  constexpr const_entry_type at(const pos_type& pos) const { return self()->at_(validate(pos)); }
   /**
    * Fetch the entry at the provided position.
    *
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr entry_type at(const write_pos& pos) { return self()->at_(validate(pos)); }
+  constexpr entry_type at(const write_pos_type& pos) { return self()->at_(validate(pos)); }
 
   /**
    * @return Iterator pointing to beginning of the data structure.
@@ -435,14 +435,14 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return Pointer the associated blob.
    */
-  constexpr const blob_t* blob_at(const pos& pos) const { return blob_at_(validate(pos)); }
+  constexpr const blob_t* blob_at(const pos_type& pos) const { return blob_at_(validate(pos)); }
   /**
    * Fetch pointer to the blob at `pos`.
    *
    * @param pos The position to query.
    * @return Pointer the associated blob.
    */
-  constexpr blob_t* blob_at(const write_pos& pos) { return blob_at_(validate(pos)); }
+  constexpr blob_t* blob_at(const write_pos_type& pos) { return blob_at_(validate(pos)); }
 
   /**
    * @return The current storage capacity of the data structure.
@@ -511,7 +511,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return True if the slot contains actual data.
    */
-  constexpr bool contains_at(const pos& pos) const { return self()->contains_at_(validate_range(pos)); }
+  constexpr bool contains_at(const pos_type& pos) const { return self()->contains_at_(validate_range(pos)); }
 
   /**
    * Count the number of entries in the data structure that match the key.
@@ -534,10 +534,10 @@ class raw_map_base : public container<Self> {
    */
   template <typename Pred>
   constexpr int_t count_if(const Pred& pred) const {
-    static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
+    static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
     int_t n{};
     self()->for_each_([&](raw_pos_t pos) {
-      n += pred(read_pos{pos});
+      n += pred(read_pos_type{pos});
     });
     return n;
   }
@@ -576,9 +576,9 @@ class raw_map_base : public container<Self> {
    * @param key The key to erase.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_first(const key_type& key) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_first(const key_type& key) {
     auto [b, p, s]{self()->erase_first_(key, key_to_hash(key))};
-    return {b, write_pos{p}, s};
+    return {b, write_pos_type{p}, s};
   }
   /**
    * Erase the first entry with a matching key in the container.
@@ -587,9 +587,9 @@ class raw_map_base : public container<Self> {
    * @param hint Hint from preceeding call to `write_prefetch`.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_first(const key_type& key, const prefetch_hint& hint) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_first(const key_type& key, const prefetch_hint& hint) {
     auto [b, p, s]{self()->erase_first_(key, hint_to_hash_(key, hint))};
-    return {b, write_pos{p}, s};
+    return {b, write_pos_type{p}, s};
   }
   /**
    * Erase the next entry (after pos) with a matching key in the container.
@@ -600,9 +600,9 @@ class raw_map_base : public container<Self> {
    * @return The position of the next key and the associated probe sequence.
    */
   template <typename PS>
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_next(write_pos&& pos, PS&& seq, const key_type& key) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
     auto [b, p, s]{self()->erase_next_(validate_range(std::move(pos)), std::forward<PS>(seq), key, key_to_hash(key))};
-    return {b, write_pos{p}, s};
+    return {b, write_pos_type{p}, s};
   }
   /**
    * Erase the next entry (after pos) with a matching key in the container.
@@ -614,9 +614,9 @@ class raw_map_base : public container<Self> {
    * @return The position of the next key and the associated probe sequence.
    */
   template <typename PS>
-  constexpr std::tuple<bool, write_pos, probe_seq_type> erase_next(write_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+  constexpr std::tuple<bool, write_pos_type, probe_seq_type> erase_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
     auto [b, p, s]{self()->erase_next_(validate_range(std::move(pos)), std::forward<PS>(seq), key, hint_to_hash_(key, hint))};
-    return {b, write_pos{p}, s};
+    return {b, write_pos_type{p}, s};
   }
   /**
    * Prune the entry at the provided position from the data structure.
@@ -624,9 +624,9 @@ class raw_map_base : public container<Self> {
    * @param pos The position to investigate.
    * @return The position if it is still valid, otherwise `npos`.
    */
-  constexpr std::pair<bool, write_pos> erase_at(write_pos&& pos) {
+  constexpr std::pair<bool, write_pos_type> erase_at(write_pos_type&& pos) {
     auto [b, p]{self()->erase_at_(validate_range(std::move(pos)))};
-    return {b, write_pos{p}};
+    return {b, write_pos_type{p}};
   }
   /**
    * Scan through the data structure and erase all matching entries.
@@ -635,8 +635,8 @@ class raw_map_base : public container<Self> {
    */
   template <typename Pred>
   constexpr int_t erase_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos>, "`pred` must be pred(write_pos) -> bool");
-    return self()->erase_if_([&](raw_pos_t pos) { return pred(write_pos{pos}); });
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(write_pos_type) -> bool");
+    return self()->erase_if_([&](raw_pos_t pos) { return pred(write_pos_type{pos}); });
   }
   /**
    * Erase all entries with a matching key in the container.
@@ -654,8 +654,8 @@ class raw_map_base : public container<Self> {
    * @param key The key to check.
    * @return The position of the entry if it exists, otherwise `npos`.
    */
-  constexpr read_pos find(const key_type& key) const noexcept {
-    return read_pos{self()->find_first_(key, key_to_hash(key)).first};
+  constexpr read_pos_type find(const key_type& key) const noexcept {
+    return read_pos_type{self()->find_first_(key, key_to_hash(key)).first};
   }
   /**
    * Locate an entry in the container.
@@ -664,8 +664,8 @@ class raw_map_base : public container<Self> {
    * @param hint Hint from preceeding call to `read_prefetch`.
    * @return The position of the entry if it exists, otherwise `npos`.
    */
-  constexpr read_pos find(const key_type& key, const prefetch_hint& hint) const {
-    return read_pos{self()->find_first_(key, hint_to_hash_(key, hint)).first};
+  constexpr read_pos_type find(const key_type& key, const prefetch_hint& hint) const {
+    return read_pos_type{self()->find_first_(key, hint_to_hash_(key, hint)).first};
   }
   /**
    * Locate the first entry with a matching key in the container.
@@ -673,9 +673,9 @@ class raw_map_base : public container<Self> {
    * @param key The key to find.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::pair<read_pos, probe_seq_type> find_first(const key_type& key) const noexcept {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_first(const key_type& key) const noexcept {
     auto [p, s]{self()->find_first_(key, key_to_hash(key))};
-    return {read_pos{p}, s};
+    return {read_pos_type{p}, s};
   }
   /**
    * Locate the first entry with a matching key in the container.
@@ -684,9 +684,9 @@ class raw_map_base : public container<Self> {
    * @param hint Hint from preceeding call to `read_prefetch`.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::pair<read_pos, probe_seq_type> find_first(const key_type& key, const prefetch_hint& hint) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_first(const key_type& key, const prefetch_hint& hint) const {
     auto [p, s]{self()->find_first_(key, hint_to_hash_(key, hint))};
-    return {read_pos{p}, s};
+    return {read_pos_type{p}, s};
   }
   /**
    * Locate the next key (after pos) in the container.
@@ -697,9 +697,9 @@ class raw_map_base : public container<Self> {
    * @return Result of `on_find`.
    */
   template <typename Pos, typename PS>
-  constexpr std::pair<read_pos, probe_seq_type> find_next(Pos&& pos, PS&& seq, const key_type& key) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_next(Pos&& pos, PS&& seq, const key_type& key) const {
     auto [p, s]{self()->find_next_(validate_range(std::forward<Pos>(pos)), std::forward<PS>(seq), key, key_to_hash(key))};
-    return {read_pos{p}, s};
+    return {read_pos_type{p}, s};
   }
   /**
    * Locate the next key (after pos) in the container.
@@ -711,9 +711,9 @@ class raw_map_base : public container<Self> {
    * @return Result of `on_find`.
    */
   template <typename Pos, typename PS>
-  constexpr std::pair<read_pos, probe_seq_type> find_next(Pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
+  constexpr std::pair<read_pos_type, probe_seq_type> find_next(Pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) const {
     auto [p, s]{self()->find_next_(validate_range(std::forward<Pos>(pos)), std::forward<PS>(seq), key, hint_to_hash_(key, hint))};
-    return {read_pos{p}, s};
+    return {read_pos_type{p}, s};
   }
   /**
    * Scan through the data structure and return the position of the matching entry.
@@ -722,19 +722,19 @@ class raw_map_base : public container<Self> {
    * @return Either the position of the entry, or `npos`.
    */
   template <typename Pred>
-  constexpr read_pos find_if(const Pred& pred) const {
-    static_assert(std::is_invocable_r_v<bool, Pred, read_pos>, "`pred` must be pred(read_pos) -> bool");
-    raw_pos_t p{self()->find_if_([&](raw_pos_t pos) { return pred(read_pos{pos}); })};
-    return read_pos{p};
+  constexpr read_pos_type find_if(const Pred& pred) const {
+    static_assert(std::is_invocable_r_v<bool, Pred, read_pos_type>, "`pred` must be pred(read_pos_type) -> bool");
+    raw_pos_t p{self()->find_if_([&](raw_pos_t pos) { return pred(read_pos_type{pos}); })};
+    return read_pos_type{p};
   }
   /**
-   * Get `read_pos`s of all entries with a matching key in the container.
+   * Get `read_pos_type`s of all entries with a matching key in the container.
    *
    * @param key The key to erase.
    * @return All found positions.
    */
-  inline std::vector<read_pos> find_all(const key_type& key) const {
-    std::vector<read_pos> res;
+  inline std::vector<read_pos_type> find_all(const key_type& key) const {
+    std::vector<read_pos_type> res;
     self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
       res.emplace_back(pos);
     });
@@ -748,8 +748,8 @@ class raw_map_base : public container<Self> {
    */
   template <typename Func>
   constexpr void for_each(const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos>, "`func` must be `func(read_pos)`!");
-    self()->for_each_([&](raw_pos_t pos) { func(read_pos{pos}); });
+    static_assert(std::is_invocable_v<Func, read_pos_type>, "`func` must be `func(read_pos_type)`!");
+    self()->for_each_([&](raw_pos_t pos) { func(read_pos_type{pos}); });
   }
   /**
    * Iterate over the data structure and call a function for each filled slot.
@@ -758,12 +758,12 @@ class raw_map_base : public container<Self> {
    */
   template <typename Func>
   constexpr void for_each(const Func& func) {
-    if constexpr (std::is_invocable_v<Func, read_pos>) {
-      self()->for_each_([&](raw_pos_t pos) { func(read_pos{pos}); });
-    } else if constexpr (std::is_invocable_v<Func, write_pos>) {
-      self()->for_each_([&](raw_pos_t pos) { func(write_pos{pos}); });
+    if constexpr (std::is_invocable_v<Func, read_pos_type>) {
+      self()->for_each_([&](raw_pos_t pos) { func(read_pos_type{pos}); });
+    } else if constexpr (std::is_invocable_v<Func, write_pos_type>) {
+      self()->for_each_([&](raw_pos_t pos) { func(write_pos_type{pos}); });
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos)` or `func(write_pos)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type)` or `func(write_pos_type)`!");
     }
   }
   /**
@@ -851,10 +851,10 @@ class raw_map_base : public container<Self> {
    */
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) const {
-    static_assert(std::is_invocable_v<Func, read_pos, probe_seq_type>, "`func` must be `func(read_pos, probe_seq_type)`!");
+    static_assert(std::is_invocable_v<Func, read_pos_type, probe_seq_type>, "`func` must be `func(read_pos_type, probe_seq_type)`!");
 
     self()->for_each_(key, key_to_hash(key),
-      [&](raw_pos_t pos, const probe_seq_type& seq) { func(read_pos{pos}, seq); }
+      [&](raw_pos_t pos, const probe_seq_type& seq) { func(read_pos_type{pos}, seq); }
     );
   }
   /**
@@ -865,16 +865,16 @@ class raw_map_base : public container<Self> {
    */
   template <typename Func>
   constexpr void for_each(const key_type& key, const Func& func) {
-    if constexpr (std::is_invocable_v<Func, read_pos, probe_seq_type>) {
+    if constexpr (std::is_invocable_v<Func, read_pos_type, probe_seq_type>) {
       self()->for_each_(key, key_to_hash(key),
-        [&](raw_pos_t pos, const probe_seq_type& seq) { func(read_pos{pos}, seq); }
+        [&](raw_pos_t pos, const probe_seq_type& seq) { func(read_pos_type{pos}, seq); }
       );
-    } else if constexpr (std::is_invocable_v<Func, write_pos, probe_seq_type>) {
+    } else if constexpr (std::is_invocable_v<Func, write_pos_type, probe_seq_type>) {
       self()->for_each_(key, key_to_hash(key),
-        [&](raw_pos_t pos, const probe_seq_type& seq) { func(write_pos{pos}, seq); }
+        [&](raw_pos_t pos, const probe_seq_type& seq) { func(write_pos_type{pos}, seq); }
       );
     } else {
-      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos, probe_seq_type)` or `func(write_pos, probe_seq_type)`!");
+      static_assert(dependent_false_v<Func>, "`func` must be `func(read_pos_type, probe_seq_type)` or `func(write_pos_type, probe_seq_type)`!");
     }
   }
 
@@ -884,8 +884,8 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @param dst The destination buffer.
    */
-  constexpr void get_blob_at(const pos& pos, void* dst) const {
-    copy_blob(dst, blob_at(pos), conf_.blob_size());
+  constexpr void get_blob_at(const pos_type& pos, void* dst) const {
+    std::memcpy(dst, blob_at(pos), to_uint(conf_.blob_size()));
   }
   /**
    * Retrieve the blob at `pos` and copy it to `dst`.
@@ -894,10 +894,10 @@ class raw_map_base : public container<Self> {
    * @param dst The destination buffer.
    * @param n The number of bytes to copy.
    */
-  constexpr void get_blob_at(const pos& pos, void* dst, int_t n) const {
+  constexpr void get_blob_at(const pos_type& pos, void* dst, int_t n) const {
     const int_t blob_size{conf_.blob_size()};
     NVHM_ASSUME_(n <= blob_size, "n = ", n, ", blob_size = ", blob_size);
-    copy_blob(dst, self()->blob_at(pos), n);
+    std::memcpy(dst, self()->blob_at(pos), to_uint(n));
   }
 
   /**
@@ -914,8 +914,9 @@ class raw_map_base : public container<Self> {
    * @return Insertion position, or `npos` if the insertion failed.
    */
   template <typename K>
-  constexpr write_pos insert(K&& key) {
-    return write_pos{std::get<0>(self()->insert_(std::forward<K>(key), key_to_hash(key)))};
+  constexpr std::pair<write_pos_type, insert_op_t> insert(K&& key) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
+    return {write_pos_type{p}, op};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -925,8 +926,9 @@ class raw_map_base : public container<Self> {
    * @return Insertion position, or `npos` if the insertion failed.
    */
   template <typename K>
-  constexpr write_pos insert(K&& key, const prefetch_hint& hint) {
-    return write_pos{std::get<0>(self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint)))};
+  constexpr std::pair<write_pos_type, insert_op_t> insert(K&& key, const prefetch_hint& hint) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
+    return {write_pos_type{p}, op};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -935,9 +937,9 @@ class raw_map_base : public container<Self> {
    * @return The insertion position, the associated probe sequence, and the insert operation conducted.
    */
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key) {
-    auto [p, s, op]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
-    return {write_pos{p}, std::move(s), op};
+  constexpr std::tuple<write_pos_type, insert_op_t, probe_seq_type> insert_ex(K&& key) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), key_to_hash(key))};
+    return {write_pos_type{p}, op, std::move(s)};
   }
   /**
    * Inserts a key into the container if it doesn't exist yet.
@@ -947,9 +949,9 @@ class raw_map_base : public container<Self> {
    * @return The insertion position, the associated probe sequence, and the insert operation conducted.
    */
   template <typename K>
-  constexpr std::tuple<write_pos, probe_seq_type, insert_op_t> insert_ex(K&& key, const prefetch_hint& hint) {
-    auto [p, s, op]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
-    return {write_pos{p}, std::move(s), op};
+  constexpr std::tuple<write_pos_type, insert_op_t, probe_seq_type> insert_ex(K&& key, const prefetch_hint& hint) {
+    auto [p, op, s]{self()->insert_(std::forward<K>(key), hint_to_hash_(key, hint))};
+    return {write_pos_type{p}, op, std::move(s)};
   }
 
   /**
@@ -971,7 +973,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated key.
    */
-  constexpr const key_type& key_at(const pos& pos) const noexcept {
+  constexpr const key_type& key_at(const pos_type& pos) const noexcept {
     return self()->key_at_(pos.inner());
   }
 
@@ -988,7 +990,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated LRU value.
    */
-  constexpr lru_t lru_at(const pos& pos) const noexcept { return self()->lru_at_(pos.inner()); }
+  constexpr lru_t lru_at(const pos_type& pos) const noexcept { return self()->lru_at_(pos.inner()); }
 
   /**
    * Fetch the mapped value at the provided position.
@@ -996,14 +998,14 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr const_mapped_type mapped_at(const pos& pos) const noexcept { return mapped_at_(pos.inner()); }
+  constexpr const_mapped_type mapped_at(const pos_type& pos) const noexcept { return mapped_at_(pos.inner()); }
   /**
    * Fetch the mapped value at the provided position.
    *
    * @param pos The position to query.
    * @return The associated entry.
    */
-  constexpr mapped_type mapped_at(const write_pos& pos) noexcept { return mapped_at_(pos.inner()); }
+  constexpr mapped_type mapped_at(const write_pos_type& pos) noexcept { return mapped_at_(pos.inner()); }
 
   /**
    * @return The maximum permissible load factor of the data structure.
@@ -1011,11 +1013,11 @@ class raw_map_base : public container<Self> {
   constexpr double max_load_factor() const noexcept { return self()->max_load_factor_(); }
 
   /**
-   * Return a dummy `read_pos` that is not associated with any position in the data structure.
+   * Return a dummy `read_pos_type` that is not associated with any position in the data structure.
    *
-   * @return A dummy `read_pos`.
+   * @return A dummy `read_pos_type`.
    */
-  constexpr static read_pos read_npos() noexcept { return read_pos{npos}; }
+  constexpr static read_pos_type read_npos() noexcept { return read_pos_type{npos}; }
 
   /**
    * Decode the key and prefetch memory to facilitate a future `read`-operation.
@@ -1041,7 +1043,7 @@ class raw_map_base : public container<Self> {
    *
    * @param pos The position to query.
    */
-  constexpr void read_prefetch_value_at(const pos& pos) const noexcept {
+  constexpr void read_prefetch_value_at(const pos_type& pos) const noexcept {
     nvhm::read_prefetch<1>(&value_at_(pos.inner()));
   }
   /**
@@ -1049,7 +1051,7 @@ class raw_map_base : public container<Self> {
    *
    * @param pos The position to query.
    */
-  constexpr void read_prefetch_blob_at(const pos& pos) const noexcept {
+  constexpr void read_prefetch_blob_at(const pos_type& pos) const noexcept {
     nvhm::read_prefetch(blob_at_(pos.inner()), conf_.blob_size());
   }
 
@@ -1160,8 +1162,8 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @param src The source buffer.
    */
-  constexpr void set_blob_at(const write_pos& pos, const void* src) {
-    copy_blob(blob_at(pos), src, conf_.blob_size());
+  constexpr void set_blob_at(const write_pos_type& pos, const void* src) {
+    std::memcpy(blob_at(pos), src, to_uint(conf_.blob_size()));
   }
   /**
    * Overwrite the blob at `pos` with the contents of `src`.
@@ -1170,16 +1172,16 @@ class raw_map_base : public container<Self> {
    * @param src The source buffer.
    * @param n The number of bytes to copy.
    */
-  constexpr void set_blob_at(const write_pos& pos, const void* src, int_t n) {
+  constexpr void set_blob_at(const write_pos_type& pos, const void* src, int_t n) {
     NVHM_ASSUME_(n <= conf_.blob_size(), "n = ", n, ", blob_size = ", conf_.blob_size());
-    copy_blob(blob_at(pos), src, n);
+    std::memcpy(blob_at(pos), src, to_uint(n));
   }
 
   /**
    * Assigns the value at `pos` to the provided value.
    */
   template <typename V>
-  constexpr void set_value_at(const write_pos& pos, V&& value) {
+  constexpr void set_value_at(const write_pos_type& pos, V&& value) {
     value_at(pos) = std::forward<V>(value);
   }
 
@@ -1202,7 +1204,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to create an iterator from.
    * @return The iterator.
    */
-  constexpr const_iterator to_iterator(pos&& pos) const {
+  constexpr const_iterator to_iterator(pos_type&& pos) const {
     if (pos == npos) {
       return end();
     } else {
@@ -1215,7 +1217,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to create an iterator from.
    * @return The iterator.
    */
-  constexpr iterator to_iterator(write_pos&& pos) {
+  constexpr iterator to_iterator(write_pos_type&& pos) {
     if (pos == npos) {
       return end();
     } else {
@@ -1228,7 +1230,7 @@ class raw_map_base : public container<Self> {
    * @param pos The position to create an iterator from.
    * @return The iterator.
    */
-  constexpr const_iterator to_citerator(pos&& pos) const { return to_iterator(std::move(pos)); }
+  constexpr const_iterator to_citerator(pos_type&& pos) const { return to_iterator(std::move(pos)); }
 
   /**
    * Locate an entry in the container.
@@ -1236,8 +1238,8 @@ class raw_map_base : public container<Self> {
    * @param key The key to check.
    * @return Result of `on_update`.
    */
-  constexpr write_pos update(const key_type& key) {
-    return write_pos{self()->find_first_(key, key_to_hash(key)).first};
+  constexpr write_pos_type update(const key_type& key) {
+    return write_pos_type{self()->find_first_(key, key_to_hash(key)).first};
   }
   /**
    * Locate an entry in the container.
@@ -1246,8 +1248,8 @@ class raw_map_base : public container<Self> {
    * @param hint Hint from preceeding call to `write_prefetch`.
    * @return The position of the entry if it exists, otherwise `npos`.
    */
-  constexpr write_pos update(const key_type& key, const prefetch_hint& hint) {
-    return write_pos{self()->find_first_(key, hint_to_hash_(key, hint)).first};
+  constexpr write_pos_type update(const key_type& key, const prefetch_hint& hint) {
+    return write_pos_type{self()->find_first_(key, hint_to_hash_(key, hint)).first};
   }
   /**
    * Locate the first entry with a matching key in the container.
@@ -1255,9 +1257,9 @@ class raw_map_base : public container<Self> {
    * @param key The key to find.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::pair<write_pos, probe_seq_type> update_first(const key_type& key) noexcept {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_first(const key_type& key) noexcept {
     auto [p, s]{self()->find_first_(key, key_to_hash(key))};
-    return {write_pos{p}, std::move(s)};
+    return {write_pos_type{p}, std::move(s)};
   }
   /**
    * Locate the first entry with a matching key in the container.
@@ -1266,9 +1268,9 @@ class raw_map_base : public container<Self> {
    * @param hint Hint from preceeding call to `read_prefetch`.
    * @return The position of the first key and the associated probe sequence.
    */
-  constexpr std::pair<write_pos, probe_seq_type> update_first(const key_type& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_first(const key_type& key, const prefetch_hint& hint) {
     auto [p, s]{self()->find_first_(key, hint_to_hash_(key, hint))};
-    return {write_pos{p}, std::move(s)};
+    return {write_pos_type{p}, std::move(s)};
   }
   /**
    * Locate the next key (after pos) in the container.
@@ -1279,9 +1281,9 @@ class raw_map_base : public container<Self> {
    * @return The position of the next key and the associated probe sequence.
    */
   template <typename PS>
-  constexpr std::pair<write_pos, probe_seq_type> update_next(write_pos&& pos, PS&& seq, const key_type& key) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key) {
     auto [p, s]{self()->find_next_(validate_range(std::move(pos)), std::forward<PS>(seq), key, key_to_hash(key))};
-    return {write_pos{p}, std::move(s)};
+    return {write_pos_type{p}, std::move(s)};
   }
   /**
    * Locate the next key (after pos) in the container.
@@ -1293,9 +1295,9 @@ class raw_map_base : public container<Self> {
    * @return The position of the next key and the associated probe sequence.
    */
   template <typename PS>
-  constexpr std::pair<write_pos, probe_seq_type> update_next(write_pos&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
+  constexpr std::pair<write_pos_type, probe_seq_type> update_next(write_pos_type&& pos, PS&& seq, const key_type& key, const prefetch_hint& hint) {
     auto [p, s]{self()->find_next_(validate_range(std::move(pos)), std::forward<PS>(seq), key, hint_to_hash_(key, hint))};
-    return {write_pos{p}, std::move(s)};
+    return {write_pos_type{p}, std::move(s)};
   }
   /**
    * Scan through the data structure and return the position of the matching entry.
@@ -1303,40 +1305,40 @@ class raw_map_base : public container<Self> {
    * @return Either the position of the entry, or `npos`.
    */
   template <typename Pred>
-  constexpr write_pos update_if(const Pred& pred) {
-    static_assert(std::is_invocable_r_v<bool, Pred, write_pos>, "`pred` must be pred(write_pos) -> bool");
-    raw_pos_t p{self()->find_if_([&](raw_pos_t pos) { return pred(write_pos{pos}); })};
-    return write_pos{p};
+  constexpr write_pos_type update_if(const Pred& pred) {
+    static_assert(std::is_invocable_r_v<bool, Pred, write_pos_type>, "`pred` must be pred(write_pos_type) -> bool");
+    raw_pos_t p{self()->find_if_([&](raw_pos_t pos) { return pred(write_pos_type{pos}); })};
+    return write_pos_type{p};
   }
   /**
-   * Get `write_pos`s of all entries with a matching key in the container.
+   * Get `write_pos_type`s of all entries with a matching key in the container.
    *
    * @param key The key to erase.
    * @return All found positions.
    */
-  inline std::vector<write_pos> update_all(const key_type& key) {
-    std::vector<write_pos> res;
+  inline std::vector<write_pos_type> update_all(const key_type& key) {
+    std::vector<write_pos_type> res;
     self()->for_each_(key, key_to_hash(key), [&](raw_pos_t pos, const probe_seq_type&) {
       res.emplace_back(pos);
     });
     return res;
   }
 
-  constexpr raw_pos_t validate(const pos& pos) const {
+  constexpr raw_pos_t validate(const pos_type& pos) const {
     NVHM_ASSUME_(contains_at(pos), "pos = ", pos);
     return pos.inner();
   }
-  constexpr raw_pos_t validate(pos&& pos) const {
+  constexpr raw_pos_t validate(pos_type&& pos) const {
     NVHM_ASSUME_(contains_at(pos), "pos = ", pos);
     return pos.inner();
   }
 
-  constexpr raw_pos_t validate_range(const pos& pos) const {
+  constexpr raw_pos_t validate_range(const pos_type& pos) const {
     raw_pos_t inner{pos.inner()};
     NVHM_ASSUME_(inner >= 0 && inner < capacity(), "pos = ", inner, ", capacity = ", capacity());
     return inner;
   }
-  constexpr raw_pos_t validate_range(pos&& pos) const {
+  constexpr raw_pos_t validate_range(pos_type&& pos) const {
     raw_pos_t inner{pos.inner()};
     NVHM_ASSUME_(inner >= 0 && inner < capacity(), "pos = ", inner, ", capacity = ", capacity());
     return inner;
@@ -1348,21 +1350,21 @@ class raw_map_base : public container<Self> {
    * @param pos The position to query.
    * @return Associated value.
    */
-  constexpr const value_type& value_at(const pos& pos) const { return value_at_(pos.inner()); }
+  constexpr const value_type& value_at(const pos_type& pos) const { return value_at_(pos.inner()); }
   /**
    * Fetch the value at `pos`.
    *
    * @param pos The position to query.
    * @return Associated value.
    */
-  constexpr value_type& value_at(const write_pos& pos) { return value_at_(pos.inner()); }
+  constexpr value_type& value_at(const write_pos_type& pos) { return value_at_(pos.inner()); }
 
   /**
-   * Return a dummy `write_pos` that is not associated with any position in the data structure.
+   * Return a dummy `write_pos_type` that is not associated with any position in the data structure.
    *
-   * @return A dummy `write_pos`.
+   * @return A dummy `write_pos_type`.
    */
-  constexpr static write_pos write_npos() noexcept { return write_pos{npos}; }
+  constexpr static write_pos_type write_npos() noexcept { return write_pos_type{npos}; }
 
   /**
    * Decode the key and prefetch memory to facilitate a future update` or `upsert`-operation.
@@ -1389,7 +1391,7 @@ class raw_map_base : public container<Self> {
    *
    * @param pos The position to query.
    */
-  constexpr void write_prefetch_value_at(const write_pos& pos) noexcept {
+  constexpr void write_prefetch_value_at(const write_pos_type& pos) noexcept {
     nvhm::write_prefetch<1>(&value_at_(pos.inner()));
   }
   /**
@@ -1397,7 +1399,7 @@ class raw_map_base : public container<Self> {
    *
    * @param pos The position to query.
    */
-  constexpr void write_prefetch_blob_at(const write_pos& pos) noexcept {
+  constexpr void write_prefetch_blob_at(const write_pos_type& pos) noexcept {
     nvhm::write_prefetch(blob_at_(pos.inner()), conf_.blob_size());
   }
 

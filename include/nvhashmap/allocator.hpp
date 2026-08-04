@@ -19,6 +19,8 @@
 
 #include "common.hpp"
 
+#include <cerrno>
+#include <cstring>
 #include <memory>
 #include <ratio>
 #include <stdexcept>
@@ -99,16 +101,16 @@ constexpr std::pair<int_t, int_t> alloc_size(int_t n) noexcept {
   if constexpr (page_align) {
     if constexpr (allow_hugepages) {
       if (n >= switch_threshold_t::num * hugepage_size / switch_threshold_t::den) {
-        return {hugepage_size, round_up<hugepage_size>(n)};
+        return {hugepage_size, round_up(n, hugepage_size)};
       }
     }
 
     if (n >= switch_threshold_t::num * page_size / switch_threshold_t::den) {
-      return {page_size, round_up<page_size>(n)};
+      return {page_size, round_up(n, page_size)};
     }
   }
 
-  return {cache_line_size, round_up<cache_line_size>(n)};
+  return {cache_line_size, round_up(n, cache_line_size)};
 }
 
 /**
@@ -141,14 +143,14 @@ class allocator_base {
   NVHM_MAKE_NOT_INSTANTIABLE_(allocator_base);
 };
 
-using default_switch_threshold = std::ratio<2, 3>;
+using default_hugepage_switch_threshold = std::ratio<2, 3>;
 
 template <
   bool PageAlign = page_align_by_default, bool UseHugePages = use_hugepages_by_default,
-  typename SwitchThreshold = default_switch_threshold>
-class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePages, SwitchThreshold>> {
+  typename SwitchThreshold = default_hugepage_switch_threshold>
+class madv_allocator : public allocator_base<madv_allocator<PageAlign, UseHugePages, SwitchThreshold>> {
  public:
-  using base_type = allocator_base<std_allocator<PageAlign, UseHugePages, SwitchThreshold>>;
+  using base_type = allocator_base<madv_allocator<PageAlign, UseHugePages, SwitchThreshold>>;
   constexpr static bool page_align{PageAlign};
   constexpr static bool use_hugepages{UseHugePages};
   using switch_threshold_type = SwitchThreshold;
@@ -157,7 +159,7 @@ class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePage
   class deleter : public deleter_base<T> {
    public:
     using base_type = deleter_base<T>;
-    using allocator_type = std_allocator;
+    using allocator_type = madv_allocator;
 
     constexpr deleter() = default;
     constexpr deleter(int_t n) noexcept : base_type{n} {}
@@ -174,7 +176,7 @@ class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePage
   template <typename T>
   using unique_ptr_type = std::unique_ptr<T, deleter_type<T>>;
 
-  NVHM_MAKE_NOT_INSTANTIABLE_(std_allocator);
+  NVHM_MAKE_NOT_INSTANTIABLE_(madv_allocator);
 
  protected:
   template <typename T>
@@ -182,19 +184,27 @@ class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePage
     if (n <= 0) return {nullptr, {}};
     const auto [align_size, n_bytes]{alloc_size<T, page_align, use_hugepages, switch_threshold_type>(n)};
 
-    T* p{static_cast<T*>(std::aligned_alloc(to_uint(align_size), to_uint(n_bytes)))};
-    if (NVHM_UNLIKELY_(!p)) throw std::bad_alloc();
+    void* p{std::aligned_alloc(to_uint(align_size), to_uint(n_bytes))};
+    if (NVHM_UNLIKELY_(!p)) {
+      NVHM_THROW_(std::runtime_error,
+        "aligned_alloc failed! errno = ", errno, ": '", strerror(errno),
+        "', align_size = ", align_size, ", n_bytes = ", n_bytes);
+    }
     NVHM_ASSERT_((reinterpret_cast<uintptr_t>(p) & make_size_mask(align_size)) == 0);
 
     if constexpr (page_align && use_hugepages) {
       if (align_size >= hugepage_size) {
+        #if defined(MADV_HUGEPAGE)
         if (NVHM_UNLIKELY_(madvise(p, to_uint(n_bytes), MADV_HUGEPAGE) != 0)) {
-          throw std::runtime_error("madvise hugepage failure! Check errno for details.");
+          NVHM_LOG_(log_level_t::error, "madvise failed! errno = ", errno, ": '", strerror(errno), "', align_size = ", align_size, ", n_bytes = ", n_bytes);
         }
+        #else
+        NVHM_LOG_(log_level_t::warning, "Hugepages requested, but `MADV_HUGEPAGE` is not available.");
+        #endif
       }
     }
 
-    return {p, n};
+    return {static_cast<T*>(p), n};
   }
 
   template <typename T, typename Deleter>
@@ -211,7 +221,7 @@ class std_allocator : public allocator_base<std_allocator<PageAlign, UseHugePage
   constexpr friend std::unique_ptr<T[], deleter_t<T, Allocator>> make_unique(int_t);
 };
 
-template <bool UseHugePages = use_hugepages_by_default, typename SwitchThreshold = default_switch_threshold>
+template <bool UseHugePages = use_hugepages_by_default, typename SwitchThreshold = default_hugepage_switch_threshold>
 class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, SwitchThreshold>> {
  public:
   using base_type = allocator_base<mmap_allocator<UseHugePages, SwitchThreshold>>;
@@ -231,8 +241,8 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
 
     constexpr void operator()(T* p) const {
       base_type::operator()(p);
-      if (NVHM_UNLIKELY_(munmap(p, n_bytes_) != 0)) {
-        NVHM_LOG_(log_level_t::error, "munmap failed, errno = ", errno);
+      if (NVHM_UNLIKELY_(munmap(p, to_uint(n_bytes_)) != 0)) {
+        NVHM_LOG_(log_level_t::error, "munmap failed, errno = ", errno, ": '", strerror(errno), "'");
       }
     }
 
@@ -252,21 +262,40 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
   template <typename T>
   constexpr static std::pair<T*, deleter_type<T>> alloc_(const int_t n) {
     if (n <= 0) return {nullptr, {}};
-    const auto [align_size, n_bytes]{alloc_size<T, true, use_hugepages, switch_threshold_type>(n)};
+    auto [align_size, n_bytes]{alloc_size<T, true, use_hugepages, switch_threshold_type>(n)};
 
-    int flags{MAP_PRIVATE | MAP_ANONYMOUS};
+    constexpr int base_flags{MAP_PRIVATE | MAP_ANONYMOUS};
+
+    int flags{base_flags};
     if constexpr (use_hugepages) {
+      #if defined(MAP_HUGETLB) && defined(MAP_HUGE_SHIFT)
       if (align_size >= hugepage_size) {
         flags |= MAP_HUGETLB;
         flags |= countr_zero(hugepage_size) << MAP_HUGE_SHIFT;
       }
+      #else
+      NVHM_LOG_(log_level_t::warning, "Hugepages requested, but either `MAP_HUGETLB` or `MAP_HUGE_SHIFT` is not available. Reverting to regular mmap.");
+      #endif
     }
 
-    T* p{static_cast<T*>(mmap(nullptr, n_bytes, PROT_READ | PROT_WRITE, flags, -1, 0))};
-    if (NVHM_UNLIKELY_(p == MAP_FAILED)) throw std::bad_alloc();
-    NVHM_ASSERT_((reinterpret_cast<uintptr_t>(p) & make_size_mask(align_size)) == 0);
+    void* p{mmap(nullptr, to_uint(n_bytes), PROT_READ | PROT_WRITE, flags, -1, 0)};
+    if (flags != base_flags) {
+      if (NVHM_UNLIKELY_(p == MAP_FAILED)) {
+        NVHM_LOG_(log_level_t::error, "Hugepage mmap failed. Trying again with regular mmap. (errno = ", errno, ": '", strerror(errno), "', align_size = ", align_size, ", n_bytes = ", n_bytes);
 
-    return {p, {n, n_bytes}};
+        align_size = page_size;
+        flags = base_flags;
+        p = mmap(nullptr, to_uint(n_bytes), PROT_READ | PROT_WRITE, flags, -1, 0);
+      }
+    }
+    if (NVHM_UNLIKELY_(p == MAP_FAILED)) {
+      NVHM_THROW_(std::runtime_error,
+        "mmap failed! errno = ", errno, ": '", strerror(errno),
+        "', align_size = ", align_size, ", n_bytes = ", n_bytes, ", use_hugepages = ", use_hugepages);
+    }
+    NVHM_ASSERT_((reinterpret_cast<uintptr_t>(p) & make_size_mask(page_size)) == 0);
+
+    return {static_cast<T*>(p), {n, n_bytes}};
   }
 
   template <typename T, typename Deleter>
@@ -283,6 +312,6 @@ class mmap_allocator : public allocator_base<mmap_allocator<UseHugePages, Switch
   constexpr friend std::unique_ptr<T[], deleter_t<T, Allocator>> make_unique(int_t);
 };
 
-using default_allocator_t = std_allocator<>;
+using default_allocator_t = std::conditional_t<prefer_madvice_hugepages, madv_allocator<>, mmap_allocator<>>;
 
 }  // namespace nvhm

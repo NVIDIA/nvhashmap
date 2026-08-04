@@ -41,9 +41,6 @@ target_link_libraries(test_masks GTest::gtest_main)
 add_executable(test_kernels test_kernels.cpp)
 target_link_libraries(test_kernels GTest::gtest_main)
 
-add_executable(test_memory test_memory.cpp)
-target_link_libraries(test_memory GTest::gtest_main)
-
 add_executable(test_mutex test_mutex.cpp)
 target_link_libraries(test_mutex GTest::gtest_main)
 

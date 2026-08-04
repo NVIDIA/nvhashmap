@@ -21,8 +21,6 @@
 #include <nvhashmap/map.hpp>
 #include <numeric>
 #include <nvhashmap/cache.hpp>
-#include <nvhashmap/guarded.hpp>
-#include <nvhashmap/sharded.hpp>
 #include <set>
 
 using namespace nvhm;
@@ -110,7 +108,7 @@ void test_insert() {
   using map_t = map<Key, float, flags_t::blobs, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using read_pos_t = typename map_t::read_pos;
+  using read_pos_t = typename map_t::read_pos_type;
 
   constexpr int_t num_keys{1000};
   key_t keys[num_keys];
@@ -121,8 +119,12 @@ void test_insert() {
 
   constexpr int_t n{map_t::kernel_size * 10 / 16};
 
+  // Just insert.
+  EXPECT_TRUE(map.keys().empty());
+  EXPECT_TRUE(map.keys_and_values().empty());
+
   for (int_t i{}; i < n; ++i) {
-    auto [pos, seq, op]{map.insert_ex(keys[i])};
+    auto [pos, op, seq]{map.insert_ex(keys[i])};
     EXPECT_GE(pos, 0);
     EXPECT_LT(pos, map.capacity());
     EXPECT_EQ(seq.psl(), 0);
@@ -133,9 +135,17 @@ void test_insert() {
     map.set_blob_at(pos, &value);
   }
 
+  for (const auto& key : map.keys()) {
+    EXPECT_NE(std::find(std::begin(keys), std::end(keys), key), std::end(keys)) << "key = " << key << " not found in keys";
+  }
+  for (const auto& [key, value] : map.keys_and_values()) {
+    EXPECT_NE(std::find(std::begin(keys), std::end(keys), key), std::end(keys)) << "key = " << key << " not found in keys";
+    EXPECT_EQ(value, key_to_float(key));
+  }
+
   // Should lead to `found` situation.
   for (int_t i{}; i < n; ++i) {
-    auto [pos, seq, op]{map.insert_ex(keys[i])};
+    auto [pos, op, seq]{map.insert_ex(keys[i])};
     EXPECT_GE(pos, 0);
     EXPECT_LT(pos, map.capacity());
     EXPECT_EQ(seq.psl(), 0);
@@ -162,7 +172,7 @@ void test_insert() {
 
     EXPECT_EQ(map.find(keys[i]), npos);
     {
-      auto [pos, seq, op]{map.insert_ex(keys[i])};
+      auto [pos, op, seq]{map.insert_ex(keys[i])};
       EXPECT_GE(pos, 0);
       EXPECT_LT(pos, map.capacity());
       EXPECT_EQ(op, insert_op_t::insert);
@@ -196,7 +206,7 @@ template <typename Key, typename Kernel>
 void test_iterators() {
   using set_t = set<Key, flags_t::none, Kernel>;
   using key_t = typename set_t::key_type;
-  using read_pos_t = typename set_t::read_pos;
+  using read_pos_t = typename set_t::read_pos_type;
 
   constexpr int_t num_keys{100};
   key_t keys[num_keys];
@@ -236,8 +246,7 @@ void test_map_iterators() {
   using map_t = map<Key, float, flags_t::blobs, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using read_pos_t = typename map_t::read_pos;
-  using write_pos_t = typename map_t::write_pos;
+  using read_pos_t = typename map_t::read_pos_type;
 
   constexpr int_t num_keys{100};
   key_t keys[num_keys];
@@ -245,8 +254,9 @@ void test_map_iterators() {
 
   map_t map(conf_t{}.set_blob(sizeof(float)).auto_adjust());
   for (const key_t& key : keys) {
-    write_pos_t pos{map.insert(key)};
+    auto [pos, op]{map.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     float value{key_to_float(key)};
     map.value_at(pos) = value;
     map.set_blob_at(pos, &value);
@@ -289,7 +299,6 @@ void test_copy_move_compare() {
   using map_t = map<Key, float, flags_t::blobs, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using write_pos_t = typename map_t::write_pos;
 
   constexpr int_t num_keys{100};
   key_t keys[num_keys];
@@ -310,13 +319,15 @@ void test_copy_move_compare() {
   EXPECT_EQ(map0, map1);
 
   for (const key_t& key : keys) {
-    write_pos_t pos{map0.insert(key)};
+    auto [pos, op]{map0.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map0.value_at(pos) = key_to_float(key);
     map0.set_blob_at(pos, &map0.value_at(pos));
     
-    pos = map1.insert(key);
+    std::tie(pos, op) = map1.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map1.value_at(pos) = key_to_float(key);
     map1.set_blob_at(pos, &map0.value_at(pos));
   }
@@ -426,7 +437,7 @@ void test_erase() {
   using set_t = set<Key, flags_t::none, Kernel>;
   using conf_t = typename set_t::conf_type;
   using key_t = typename set_t::key_type;
-  using read_pos_t = typename set_t::read_pos;
+  using read_pos_t = typename set_t::read_pos_type;
   
   // Low congestion case.
   {
@@ -626,7 +637,9 @@ void test_erase_auto_reclaim() {
   EXPECT_EQ(set.find_range(std::begin(keys), std::end(keys)), 0);
 
   for (int_t i{}; i < num_keys / 2; ++i) {
-    EXPECT_NE(set.insert(keys[i]), npos);
+    auto [pos, op]{set.insert(keys[i])};
+    EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
   }
 
   EXPECT_EQ(set.capacity(), prev_capacity);
@@ -677,7 +690,6 @@ void test_mulitmap_find() {
   using map_t = map<Key, double, flags_t::blobs | flags_t::duplicates, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using write_pos_t = typename map_t::write_pos;
 
   constexpr int_t num_keys{200};
   key_t keys[num_keys];
@@ -689,8 +701,9 @@ void test_mulitmap_find() {
   const int_t prev_capacity{map.capacity()};
 
   for (const key_t& key : keys) {
-    write_pos_t pos{map.insert(key)};
+    auto [pos, op]{map.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
 
     map.set_value_at(pos, 1.0);
     EXPECT_EQ(map.value_at(pos), 1.0);
@@ -718,23 +731,27 @@ void test_mulitmap_find() {
 
   // Insert keys again. Now we should find a successor for each key.
   for (const key_t& key : keys) {
-    write_pos_t pos{map.insert(key)};
+    auto [pos, op]{map.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 2.0);
     EXPECT_EQ(map.value_at(pos), 2.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 3.0);
     EXPECT_EQ(map.value_at(pos), 3.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 4.0);
     EXPECT_EQ(map.value_at(pos), 4.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 5.0);
     EXPECT_EQ(map.value_at(pos), 5.0);
   }
@@ -806,7 +823,6 @@ void test_mulitmap_erase() {
   using map_t = map<Key, double, flags_t::duplicates, Kernel>;
   using conf_t = typename map_t::conf_type;
   using key_t = typename map_t::key_type;
-  using write_pos_t = typename map_t::write_pos;
 
   constexpr int_t num_keys{200};
   key_t keys[num_keys];
@@ -819,8 +835,9 @@ void test_mulitmap_erase() {
 
   // Insert keys.
   for (const key_t& key : keys) {
-    write_pos_t pos{map.insert(key)};
+    auto [pos, op]{map.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
 
     map.set_value_at(pos, 1.0);
     EXPECT_EQ(map.value_at(pos), 1.0);
@@ -830,23 +847,28 @@ void test_mulitmap_erase() {
 
   // Insert keys again.
   for (const key_t& key : keys) {
-    write_pos_t pos{map.insert(key)};
+    auto [pos, op]{map.insert(key)};
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 2.0);
     EXPECT_EQ(map.value_at(pos), 2.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
+    EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     EXPECT_NE(pos, npos);
     map.set_value_at(pos, 3.0);
     EXPECT_EQ(map.value_at(pos), 3.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 4.0);
     EXPECT_EQ(map.value_at(pos), 4.0);
 
-    pos = map.insert(key);
+    std::tie(pos, op) = map.insert(key);
     EXPECT_NE(pos, npos);
+    EXPECT_EQ(op, insert_op_t::insert);
     map.set_value_at(pos, 5.0);
     EXPECT_EQ(map.value_at(pos), 5.0);
   }

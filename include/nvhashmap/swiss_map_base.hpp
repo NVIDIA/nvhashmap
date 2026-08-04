@@ -44,9 +44,9 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
   using probe_seq_type = typename base_type::probe_seq_type;
   using allocator_type = typename base_type::allocator_type;
 
-  using pos = typename base_type::pos;
-  using read_pos = typename base_type::read_pos;
-  using write_pos = typename base_type::write_pos;
+  using pos_type = typename base_type::pos_type;
+  using read_pos_type = typename base_type::read_pos_type;
+  using write_pos_type = typename base_type::write_pos_type;
 
   using prefetch_hint = typename base_type::prefetch_hint;
 
@@ -77,7 +77,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param pos The position to query.
    * @return The number of entries in the bucket.
    */
-  constexpr int_t bucket_size_at(const pos& pos) const {
+  constexpr int_t bucket_size_at(const pos_type& pos) const {
     return self()->bucket_size_at_(validate_range(pos));
   }
   /**
@@ -86,7 +86,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param pos The position to query.
    * @return The number of empty slots in the bucket.
    */
-  constexpr int_t bucket_num_empty_slots_at(const pos& pos) const {
+  constexpr int_t bucket_num_empty_slots_at(const pos_type& pos) const {
     return self()->bucket_num_empty_slots_at_(validate_range(pos));
   }
   /**
@@ -95,7 +95,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param pos The position to query.
    * @return The number of tombstone slots in the bucket.
    */
-  constexpr int_t bucket_num_tombstone_slots_at(const pos& pos) const {
+  constexpr int_t bucket_num_tombstone_slots_at(const pos_type& pos) const {
     return self()->bucket_num_tombstone_slots_at_(validate_range(pos));
   }
 
@@ -222,7 +222,7 @@ class swiss_map_base : public raw_map_base<Self, Conf, ProbeSeq, Allocator> {
    * @param pos The position to query.
    * @return The associated state byte.
    */
-  constexpr state_t state_at(const pos& pos) const { return self()->state_at_(validate_range(pos)); }
+  constexpr state_t state_at(const pos_type& pos) const { return self()->state_at_(validate_range(pos)); }
 
   constexpr friend bool operator==(const swiss_map_base& lhs, const swiss_map_base& rhs) {
     static_assert(!test_flags(flags, flags_t::duplicates), "Not implemented yet!");
