@@ -465,7 +465,7 @@ else()
   option(NVHM_WANT_SVE2         "Enable SVE2"         OFF)
 endif()
 
-set(NVHM_WANT_PREFETCH_CACHE_LEVEL "2" CACHE STRING "Cache level to aim for when issuing prefetches")
+set(NVHM_WANT_PREFETCH_CACHE_LEVEL "1" CACHE STRING "Cache level to aim for when issuing prefetches")
 
 option(NVHM_WANT_RANGE_PREFETCH "Use scoped SVE prefetches (experimental feature, not for production use)" OFF)
 
