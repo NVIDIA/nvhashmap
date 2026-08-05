@@ -51,12 +51,13 @@ void count_collisions(const state_t* states, std::array<Count, Kernel::size>& ac
   #pragma clang diagnostic pop
   #pragma GCC diagnostic pop
 
-  it = std::unique(tmp.begin(), it);
-  while (it-- > tmp.begin()) {
-    const auto m{kern_t::mask(k, *it)};
-    const int_t i{mask_t::count(m) - 1};
+  const auto end{it};
+  for (it = tmp.begin(); it != end;) {
+    const auto next{std::upper_bound(it, end, *it)};
+    const int_t i{next - it - 1};
     NVHM_ASSERT_(i >= 0 && i < kern_t::size);
     ++acc[to_uint(i)];
+    it = next;
   }
 }
 
