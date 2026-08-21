@@ -486,14 +486,6 @@ struct sve_mask final : public mask {
   inline static raw_pos_t next(repr_type m, raw_pos_t off) noexcept {
     // Confirmed to produce `incp` on both Clang and GCC.
     return off + next(m);
-    // m = svbrkb_b_z(svptrue_b8(), m);
-    // if constexpr (sizeof(raw_pos_t) == sizeof(int64_t)) {
-    //   return svqincp_n_s64_b8(off, m);
-    // } else if constexpr (sizeof(raw_pos_t) == sizeof(int32_t)) {
-    //   return svqincp_n_s32_b8(off, m);
-    // } else {
-    //   static_assert(dependent_type_false_v<raw_pos_t>, "Shouldn't happen!");
-    // }
   }
 
   inline static repr_type step(repr_type m) noexcept { return svnot_b_z(m, truncate(m)); }

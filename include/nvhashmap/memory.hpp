@@ -52,18 +52,6 @@ inline void arm64_rprfm(const std::byte* __restrict p, int_t n) noexcept {
 
 namespace nvhm {
 
-namespace detail {
-
-#if NVHM_WITH_SSE
-#if (defined(__GNUC__) && (__GNUC__ < 15)) || defined(__clang__)
-using mm_hint_t = int;
-#else
-using mm_hint_t = _mm_hint;
-#endif
-#endif
-
-}  // namespace detail
-
 template <typename T>
 inline void read_prefetch(const T* p, int_t n) noexcept {
   read_prefetch(reinterpret_cast<const std::byte*>(p), n * num_bytes_v<T>);
@@ -84,7 +72,7 @@ inline void read_prefetch<std::byte>(const std::byte* __restrict p, int_t n) noe
   for (int_t i{}; i < n; i += cache_line_size) {
 #if NVHM_WITH_SSE
     if constexpr (use_sse_prefetch) {
-      constexpr detail::mm_hint_t hint{[]() {
+      _mm_prefetch(&p[i], []() {
         if constexpr (prefetch_cache_level == 1) {
           return _MM_HINT_T0;
         } else if constexpr (prefetch_cache_level == 2) {
@@ -94,8 +82,7 @@ inline void read_prefetch<std::byte>(const std::byte* __restrict p, int_t n) noe
         } else {
           return _MM_HINT_NTA;
         }
-      }()};
-      _mm_prefetch(&p[i], hint);
+      }());
       continue;
     }
 #endif
@@ -130,11 +117,10 @@ inline void write_prefetch<std::byte>(std::byte* __restrict p, int_t n) noexcept
     #if NVHM_WITH_SSE
     if constexpr (use_sse_prefetch) {
       #if defined(_MM_HINT_ET1)
-      constexpr detail::mm_hint_t hint{prefetch_cache_level == 1 ? _MM_HINT_ET0 : _MM_HINT_ET1};
+      _mm_prefetch(&p[i], prefetch_cache_level == 1 ? _MM_HINT_ET0 : _MM_HINT_ET1);
       #else
-      constexpr detail::mm_hint_t hint{_MM_HINT_ET0};
+      _mm_prefetch(&p[i], _MM_HINT_ET0);
       #endif
-      _mm_prefetch(&p[i], hint);
       continue;
     }
     #endif

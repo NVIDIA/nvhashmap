@@ -2440,10 +2440,8 @@ using default_kernel256_t = typename default_kernel<256>::type;
 using default_kernel512_t = typename default_kernel<512>::type;
 
 constexpr int_t default_kernel_size{
-  #if NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 16
-  num_bytes_v<svint8_t>
-  #elif NVHM_WITH_SSE >= 2
-  sse_kernel_t::size
+  #if NVHM_WITH_SSE >= 2 || NVHM_WITH_NEON || (NVHM_WITH_SVE && NVHM_WITH_SVE_SIZE >= 16)
+  num_bytes_v<__int128_t>
   #else
   num_bytes_v<int_t>
   #endif
