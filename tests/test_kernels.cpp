@@ -706,6 +706,25 @@ void test_kernel_to_empty_if_lru_below(const int_t num_iter = 1024) {
   }
 }
 
+TEST(test_count_collisions, fast_uint_kernel2_t) {
+  using kern_t = fast_uint_kernel2_t;
+  alignas(kern_t::size) state_t states[kern_t::size]{kern_t::empty, kern_t::empty};
+  std::array<int_t, kern_t::size> collisions{};
+
+  count_collisions<kern_t>(states, collisions);
+  EXPECT_EQ(collisions, (std::array<int_t, kern_t::size>{0, 0}));
+
+  states[0] = 0;
+  states[1] = 1;
+  count_collisions<kern_t>(states, collisions);
+  EXPECT_EQ(collisions, (std::array<int_t, kern_t::size>{2, 0}));
+
+  collisions.fill(0);
+  states[1] = 0;
+  count_collisions<kern_t>(states, collisions);
+  EXPECT_EQ(collisions, (std::array<int_t, kern_t::size>{0, 1}));
+}
+
 #define EVAL_KERNELS_(_X_) \
   TEST(test_kernel_load_store, _X_) { test_kernel_load_store<_X_>(); } \
   TEST(test_kernel_at, _X_) { test_kernel_at<_X_>(); } \
