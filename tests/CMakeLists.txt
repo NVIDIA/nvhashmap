@@ -24,3 +24,6 @@ target_link_libraries(test_kernels GTest::gtest_main)
 
 add_executable(test_maps test_maps.cpp)
 target_link_libraries(test_maps GTest::gtest_main)
+
+add_executable(test_tombstone_reuse test_tombstone_reuse.cpp)
+target_link_libraries(test_tombstone_reuse GTest::gtest_main)

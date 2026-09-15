@@ -520,7 +520,7 @@ class map {
 
  public:
   /**
-   * Number of slots currently occupied with a valid hash.
+   * Number of slots occupied by a valid hash or a tombstone marker.
    */
   inline size_t num_used() const noexcept { return num_used_; }
 
@@ -920,6 +920,8 @@ class map {
               pos = mask_type::next(mask, off);
             } else {
               pos = tomb_pos;
+              // Tombstones already count towards num_used_. Reusing one only
+              // removes its tombstone marker, increasing size() by exactly one.
               --num_tombstones_;
             }
           } else {
@@ -928,7 +930,9 @@ class map {
 
           states[pos] = s;
           keys[pos] = k;
-          ++num_used_;
+          if (tomb_pos == npos) {
+            ++num_used_;
+          }
           if constexpr (!std::is_same_v<It, std::monostate>) {
             ++it;
           }
