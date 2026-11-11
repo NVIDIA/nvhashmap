@@ -62,7 +62,9 @@ constexpr raw_pos_t hash_to_pos(hash_t h) noexcept {
     // TODO: Is this really necessary?
     h <<= num_kernel_bits;
   }
-  return static_cast<raw_pos_t>(h);
+  // Probe sequences expect a non-negative start position. Only the low bits survive bucket masking,
+  // so clearing the sign bit does not change which bucket is probed.
+  return static_cast<raw_pos_t>(h & static_cast<hash_t>(std::numeric_limits<raw_pos_t>::max()));
 }
 
 constexpr state_t hash_to_state(hash_t h) noexcept {
