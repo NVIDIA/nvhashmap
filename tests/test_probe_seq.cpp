@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include <nvhashmap/hash.hpp>
 #include <nvhashmap/probe_seq.hpp>
 #include <nvhashmap/kernel.hpp>
 
@@ -307,3 +308,21 @@ TEST(test_probe_seq_symmetry, linear_seq___0__1k_t) { test_probe_seq_symmetry<li
 TEST(test_probe_seq_symmetry, quadratic_seq___0_inf_t) { test_probe_seq_symmetry<quadratic_seq___0_inf_t, quadratic_seq___1_inf_t>(); }
 TEST(test_probe_seq_symmetry, quadratic_seq___0_128_t) { test_probe_seq_symmetry<quadratic_seq___0_128_t, quadratic_seq___1_128_t>(); }
 TEST(test_probe_seq_symmetry, quadratic_seq___0__1k_t) { test_probe_seq_symmetry<quadratic_seq___0__1k_t, quadratic_seq___1__1k_t>(); }
+
+template <int_t KernelSize>
+void test_hash_to_pos_non_negative() {
+  for (const hash_t h : {hash_t{}, ~hash_t{}, hash_t{1} << 63, hash_t{1} << 59, hash_t{0xde5f'b9d2'6304'58e9}}) {
+    const raw_pos_t pos{hash_to_pos<KernelSize>(h)};
+    EXPECT_GE(pos, 0) << "kernel_size = " << KernelSize << ", h = " << h;
+  }
+}
+
+TEST(test_hash_to_pos, non_negative) {
+  test_hash_to_pos_non_negative<1>();
+  test_hash_to_pos_non_negative<2>();
+  test_hash_to_pos_non_negative<4>();
+  test_hash_to_pos_non_negative<8>();
+  test_hash_to_pos_non_negative<16>();
+  test_hash_to_pos_non_negative<32>();
+  test_hash_to_pos_non_negative<64>();
+}
